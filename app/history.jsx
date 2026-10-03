@@ -1,4 +1,4 @@
-import { HistoryScreen } from "../src/screens/DinkScreens";
+import { HistoryScreen } from "../src/screens/HistoryScreen";
 import { RouteErrorState } from "../src/components/AppShell";
 
 export default function HistoryRoute() {

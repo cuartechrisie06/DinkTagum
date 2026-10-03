@@ -1,3 +1,9 @@
+-- DEPRECATED — do not run this file.
+--
+-- Canonical schema, RLS, and triggers live in supabase/migrations/. This
+-- predates the hardened RLS policies and lacks the columns and policies added
+-- since. Kept only for historical reference.
+--
 -- Run once in Supabase Dashboard > SQL Editor.
 -- This creates empty live-data tables; it deliberately does not insert sample records.
 

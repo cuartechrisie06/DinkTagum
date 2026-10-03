@@ -1,3 +1,12 @@
+-- DEPRECATED — do not run this file.
+--
+-- Canonical schema, RLS, and triggers live in supabase/migrations/. This script
+-- predates the hardened RLS policies in
+-- supabase/migrations/20260919000200_harden_rls_policies.sql and only allows a
+-- user to see their own profile (no directory/admin visibility, no delete
+-- policy). Running it against a migrated project can reintroduce a weaker
+-- security model. Kept only for historical reference.
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null check (char_length(trim(display_name)) between 1 and 80),

@@ -1,4 +1,4 @@
-import { HomeScreen } from "../src/screens/DinkScreens";
+import { HomeScreen } from "../src/screens/HomeScreen";
 import { RouteErrorState } from "../src/components/AppShell";
 
 export default function HomeRoute() {

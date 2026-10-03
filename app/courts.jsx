@@ -1,4 +1,4 @@
-import { CourtsScreen } from "../src/screens/DinkScreens";
+import { CourtsScreen } from "../src/screens/CourtsScreen";
 import { RouteErrorState } from "../src/components/AppShell";
 
 export default function CourtsRoute() {

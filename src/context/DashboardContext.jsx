@@ -1,11 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { Alert } from "react-native";
 import * as Location from "expo-location";
 import { supabase } from "../../lib/supabase";
+import { notify } from "../utils/confirm";
+import { useAuth } from "./AuthContext";
 
-const AppDataContext = createContext(null);
+const DashboardContext = createContext(null);
 
-function courtForDisplay(court) {
+export function courtForDisplay(court) {
   const distance = court.distance_km ?? court.distance ?? null;
   const status = ["Available", "Full", "Closed"].includes(court.status) ? court.status : "Available";
   return {
@@ -46,18 +47,6 @@ export function courtsNearLocation(courts, location) {
     .sort((a, b) => Number.parseFloat(a.dist) - Number.parseFloat(b.dist));
 }
 
-export function communityPostForDisplay(post, profilesById, currentUser, currentProfile) {
-  const author = post.author_id === currentUser?.id ? currentProfile : profilesById[post.author_id];
-  const name = author?.display_name || "DinkTagum player";
-  const initials = (name || "").trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "DT";
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(post.created_at).getTime()) / 1000));
-  let time = "Just now";
-  if (seconds >= 86400) time = new Date(post.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  else if (seconds >= 3600) time = `${Math.floor(seconds / 3600)}h ago`;
-  else if (seconds >= 60) time = `${Math.floor(seconds / 60)}m ago`;
-  return { ...post, name, initials, avatarUrl: author?.avatar_url, time, text: post.body };
-}
-
 export function parseSlotLabel(timeLabel) {
   const [time, meridiem] = timeLabel.split(" ");
   let [hour, minute] = time.split(":").map(Number);
@@ -83,6 +72,25 @@ export function buildDayOptions(count = 3) {
   return days;
 }
 
+// The next pending/confirmed reservation that hasn't started yet, or null.
+export function nextUpcomingReservation(reservations, now = Date.now()) {
+  return reservations
+    .filter((r) => ["pending", "confirmed"].includes(r.status) && new Date(r.start_time).getTime() >= now)
+    .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))[0] || null;
+}
+
+export function canCancelReservation(reservation, now = Date.now()) {
+  return ["pending", "confirmed"].includes(reservation.status) && new Date(reservation.start_time).getTime() > now;
+}
+
+// True once a slot on the given day has started, so it can no longer be booked.
+export function slotHasStarted(dayDate, timeLabel, now = Date.now()) {
+  const { hour, minute } = parseSlotLabel(timeLabel);
+  const start = new Date(dayDate);
+  start.setHours(hour, minute, 0, 0);
+  return start.getTime() <= now;
+}
+
 export function slotOverlapsBusy(dayDate, timeLabel, busyRanges) {
   const { hour, minute } = parseSlotLabel(timeLabel);
   const start = new Date(dayDate);
@@ -95,53 +103,27 @@ export function slotOverlapsBusy(dayDate, timeLabel, busyRanges) {
   });
 }
 
-export function AppDataProvider({ children }) {
-  const [session, setSession] = useState(null);
+// Mounted only while signed in (see app/_layout.jsx), keyed by user id, so a sign-out or
+// switch to a different account remounts this provider instead of needing manual resets.
+export function DashboardProvider({ children }) {
+  const { session } = useAuth();
+  const userId = session.user.id;
+
   const [profile, setProfile] = useState(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [reserving, setReserving] = useState(false);
   const [courts, setCourts] = useState([]);
-  const [reservation, setReservation] = useState(null);
-  const [communityPosts, setCommunityPosts] = useState([]);
-  const [postsLoading, setPostsLoading] = useState(false);
-  const [postsError, setPostsError] = useState("");
+  const [rawCourts, setRawCourts] = useState([]);
+  const [reservations, setReservations] = useState([]);
+  const [reloadKey, setReloadKey] = useState(0);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState("");
   const [userLocation, setUserLocation] = useState(null);
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationMessage, setLocationMessage] = useState("");
-  const [authReady, setAuthReady] = useState(false);
-  const [detail, setDetail] = useState(null);
-  const [chatView, setChatView] = useState(null);
-  const [notificationView, setNotificationView] = useState(false);
-  const [adminView, setAdminView] = useState(false);
 
   useEffect(() => {
-    if (!supabase) {
-      setAuthReady(true);
-      return undefined;
-    }
-    supabase.auth.getSession()
-      .then(({ data: { session: currentSession } }) => {
-        setSession(currentSession);
-        setAuthReady(true);
-      })
-      .catch(() => {
-        setSession(null);
-        setAuthReady(true);
-      });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
-    return () => subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!session?.user || !supabase) {
-      setProfile(null);
-      setCourts([]);
-      setReservation(null);
-      setDashboardError("");
-      return undefined;
-    }
+    if (!supabase) return undefined;
     let active = true;
     const loadDashboard = async () => {
       setDashboardLoading(true);
@@ -153,18 +135,16 @@ export function AppDataProvider({ children }) {
         setDashboardLoading(false);
         return;
       }
-      const userId = authData.user.id;
       const [profileResult, courtsResult, reservationResult] = await Promise.all([
-        supabase.from("profiles").select("display_name, location, skill_level, avatar_url, preferred_game_type, is_directory_visible, created_at").eq("id", userId).maybeSingle(),
+        supabase.from("profiles").select("display_name, location, skill_level, avatar_url, preferred_game_type, is_directory_visible, created_at").eq("id", authData.user.id).maybeSingle(),
         supabase.from("courts").select("*").order("name", { ascending: true }),
-        supabase.from("reservations").select("*").eq("user_id", userId).in("status", ["pending", "confirmed"]).gte("start_time", new Date().toISOString()).order("start_time", { ascending: true }).limit(1).maybeSingle(),
+        supabase.from("reservations").select("*").eq("user_id", authData.user.id).order("start_time", { ascending: false }).limit(100),
       ]);
       if (!active) return;
       if (profileResult.data) setProfile(profileResult.data);
+      setRawCourts(courtsResult.data || []);
       setCourts((courtsResult.data || []).map(courtForDisplay));
-      const liveReservation = reservationResult.data || null;
-      const reservationCourt = liveReservation ? (courtsResult.data || []).find((court) => court.id === liveReservation.court_id) : null;
-      setReservation(liveReservation ? { ...liveReservation, court: reservationCourt ? courtForDisplay(reservationCourt) : null } : null);
+      setReservations(reservationResult.data || []);
       const errors = [profileResult.error, courtsResult.error, reservationResult.error].filter(Boolean);
       if (errors.length) setDashboardError(`Some dashboard data could not be loaded: ${errors.map((queryError) => queryError.message).join(" · ")}`);
       setDashboardLoading(false);
@@ -175,69 +155,37 @@ export function AppDataProvider({ children }) {
       setDashboardLoading(false);
     });
     return () => { active = false; };
-  }, [session]);
+  }, [userId, reloadKey]);
 
-  useEffect(() => {
-    if (!session?.user || !supabase) {
-      setCommunityPosts([]);
-      setPostsError("");
-      return undefined;
-    }
-    let active = true;
-    const loadPosts = async () => {
-      setPostsLoading(true);
-      const { data: postRows, error: postError } = await supabase.from("community_posts").select("id, author_id, body, photo_urls, created_at").order("created_at", { ascending: false }).limit(100);
-      if (!active) return;
-      if (postError) {
-        setPostsError(`Community posts could not be loaded: ${postError.message}`);
-        setPostsLoading(false);
-        return;
-      }
-      const authorIds = [...new Set((postRows || []).map((post) => post.author_id).filter((id) => id !== session.user.id))];
-      const { data: authorRows } = authorIds.length ? await supabase.from("profiles").select("id, display_name, avatar_url").in("id", authorIds) : { data: [] };
-      if (!active) return;
-      const profilesById = Object.fromEntries((authorRows || []).map((author) => [author.id, author]));
-      setCommunityPosts((postRows || []).map((post) => communityPostForDisplay(post, profilesById, session.user, profile)));
-      setPostsError("");
-      setPostsLoading(false);
-    };
-    loadPosts();
-    const channel = supabase.channel(`community-posts-${session.user.id}`).on("postgres_changes", { event: "*", schema: "public", table: "community_posts" }, loadPosts).subscribe();
-    return () => { active = false; supabase.removeChannel(channel); };
-  // Intentionally keyed on identity fields so author labels refresh without full profile object churn.
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- session.user and profile objects change identity often
-  }, [session?.user?.id, profile?.display_name, profile?.avatar_url]);
+  const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
-  const createCommunityPost = useCallback(async (body) => {
-    if (!session?.user || !supabase) return false;
-    const { data, error } = await supabase.from("community_posts").insert({ author_id: session.user.id, body }).select("id, author_id, body, photo_urls, created_at").single();
-    if (error) { Alert.alert("Could not publish post", error.message); return false; }
-    setCommunityPosts((current) => {
-      if (current.some((post) => post.id === data.id)) return current;
-      return [communityPostForDisplay(data, {}, session.user, profile), ...current];
-    });
-    return true;
-  }, [session, profile]);
+  // Reservations joined to their display court; court rows can be missing if an
+  // admin removed a court the player once booked.
+  const reservationsWithCourts = useMemo(() => {
+    const byId = Object.fromEntries(rawCourts.map((court) => [court.id, court]));
+    return reservations.map((r) => ({ ...r, court: byId[r.court_id] ? courtForDisplay(byId[r.court_id]) : null }));
+  }, [reservations, rawCourts]);
+  const reservation = useMemo(() => nextUpcomingReservation(reservationsWithCourts), [reservationsWithCourts]);
 
   const saveProfile = useCallback(async (changes) => {
-    if (!session?.user || !supabase) return false;
+    if (!supabase) return false;
     const display_name = changes.display_name.trim();
     const location = changes.location.trim();
     const skill_level = Number(changes.skill_level);
     const avatar_url = changes.avatar_url.trim();
     const preferred_game_type = changes.preferred_game_type;
     const is_directory_visible = Boolean(changes.is_directory_visible);
-    if (!display_name) { Alert.alert("Add your name", "Your display name cannot be blank."); return false; }
-    if (!Number.isFinite(skill_level) || skill_level < 1 || skill_level > 5) { Alert.alert("Check skill level", "Use a number from 1.0 to 5.0."); return false; }
-    if (avatar_url && !/^https?:\/\//i.test(avatar_url)) { Alert.alert("Check avatar URL", "Use a full http or https image URL."); return false; }
-    if (!["Singles", "Doubles", "Either"].includes(preferred_game_type)) { Alert.alert("Check game type", "Choose Singles, Doubles, or Either."); return false; }
+    if (!display_name) { notify("Add your name", "Your display name cannot be blank."); return false; }
+    if (!Number.isFinite(skill_level) || skill_level < 1 || skill_level > 5) { notify("Check skill level", "Use a number from 1.0 to 5.0."); return false; }
+    if (avatar_url && !/^https?:\/\//i.test(avatar_url)) { notify("Check avatar URL", "Use a full http or https image URL."); return false; }
+    if (!["Singles", "Doubles", "Either"].includes(preferred_game_type)) { notify("Check game type", "Choose Singles, Doubles, or Either."); return false; }
     setSavingProfile(true);
-    const { data, error } = await supabase.from("profiles").upsert({ id: session.user.id, display_name, location: location || null, skill_level, avatar_url: avatar_url || null, preferred_game_type, is_directory_visible }, { onConflict: "id" }).select().single();
+    const { data, error } = await supabase.from("profiles").upsert({ id: userId, display_name, location: location || null, skill_level, avatar_url: avatar_url || null, preferred_game_type, is_directory_visible }, { onConflict: "id" }).select().single();
     setSavingProfile(false);
-    if (error) { Alert.alert("Could not save profile", error.message); return false; }
+    if (error) { notify("Could not save profile", error.message); return false; }
     setProfile(data);
     return true;
-  }, [session]);
+  }, [userId]);
 
   const loadBusySlots = useCallback(async (courtId, dayKey) => {
     if (!supabase || !courtId || !dayKey) return [];
@@ -282,36 +230,44 @@ export function AppDataProvider({ children }) {
   }, []);
 
   const createReservation = useCallback(async (court, dayKey, timeLabel) => {
-    if (!session?.user || !supabase) return false;
-    if (court.status === "Closed") {
-      Alert.alert("Court closed", "This court is closed and cannot be reserved.");
-      return false;
-    }
-    if (court.status === "Full") {
-      Alert.alert("Court full", "This court is marked full and cannot take new reservations.");
-      return false;
-    }
+    if (!supabase) return { ok: false, message: "Supabase is not configured." };
+    if (court.status === "Closed") return { ok: false, message: "This court is closed and cannot be reserved." };
+    if (court.status === "Full") return { ok: false, message: "This court is marked full and cannot take new reservations." };
     const { hour, minute } = parseSlotLabel(timeLabel);
     const start = new Date(`${dayKey}T00:00:00`);
     start.setHours(hour, minute, 0, 0);
     const end = new Date(start.getTime() + 60 * 60 * 1000);
-    if (start.getTime() <= Date.now()) {
-      Alert.alert("Pick a future time", "Choose a slot that has not already started.");
-      return false;
-    }
+    if (start.getTime() <= Date.now()) return { ok: false, message: "That time has already started today. Pick a later slot or another day." };
     setReserving(true);
     const { data, error } = await supabase.from("reservations").insert({
-      user_id: session.user.id, court_id: court.id, start_time: start.toISOString(), end_time: end.toISOString(), status: "pending",
+      user_id: userId, court_id: court.id, start_time: start.toISOString(), end_time: end.toISOString(), status: "pending",
     }).select().single();
     setReserving(false);
     if (error) {
-      const overlap = /overlap|exclusion|23P01|conflicting/i.test(error.message);
-      Alert.alert("Reservation not submitted", overlap ? "That time slot was just taken. Pick another time." : error.message);
-      return false;
+      const overlap = error.code === "23P01" || /overlap|exclusion|conflicting/i.test(error.message);
+      return { ok: false, message: overlap ? "That time slot was just taken. Pick another time." : `Reservation not submitted: ${error.message}` };
     }
-    setReservation({ ...data, court });
+    setReservations((current) => [data, ...current]);
+    return { ok: true };
+  }, [userId]);
+
+  // Players cancel rather than delete upcoming bookings: the row stays in their
+  // history and the slot is freed (the overlap constraint ignores cancelled rows).
+  const cancelReservation = useCallback(async (id) => {
+    if (!supabase) return false;
+    const { data, error } = await supabase.from("reservations").update({ status: "cancelled" }).eq("id", id).eq("user_id", userId).select().single();
+    if (error) { notify("Could not cancel reservation", error.message); return false; }
+    setReservations((current) => current.map((r) => (r.id === id ? data : r)));
     return true;
-  }, [session]);
+  }, [userId]);
+
+  const deleteReservation = useCallback(async (id) => {
+    if (!supabase) return false;
+    const { error } = await supabase.from("reservations").delete().eq("id", id).eq("user_id", userId);
+    if (error) { notify("Could not remove reservation", error.message); return false; }
+    setReservations((current) => current.filter((r) => r.id !== id));
+    return true;
+  }, [userId]);
 
   const findNearbyCourts = useCallback(async () => {
     setLocationLoading(true);
@@ -331,65 +287,34 @@ export function AppDataProvider({ children }) {
     }
   }, []);
 
-  const signOut = useCallback(async () => {
-    setDetail(null);
-    setChatView(null);
-    setNotificationView(false);
-    setAdminView(false);
-    await supabase?.auth.signOut();
-  }, []);
-
-  const closeOverlays = useCallback(() => {
-    setDetail(null);
-    setChatView(null);
-    setNotificationView(false);
-    setAdminView(false);
-  }, []);
-
   const visibleCourts = useMemo(() => courtsNearLocation(courts, userLocation), [courts, userLocation]);
-  const isAdmin = session?.user?.app_metadata?.role === "admin";
-  const hasOverlay = Boolean(detail || chatView || notificationView || adminView);
 
   const value = {
-    session,
-    authReady,
     profile,
     savingProfile,
-    reserving,
+    saveProfile,
     courts: visibleCourts,
     reservation,
-    communityPosts,
-    postsLoading,
-    postsError,
+    reservations: reservationsWithCourts,
+    reserving,
+    createReservation,
+    cancelReservation,
+    deleteReservation,
+    reload,
+    loadBusySlots,
     dashboardLoading,
     dashboardError,
     locationLoading,
     locationMessage,
     hasLocation: Boolean(userLocation),
-    detail,
-    setDetail,
-    chatView,
-    setChatView,
-    notificationView,
-    setNotificationView,
-    adminView,
-    setAdminView,
-    hasOverlay,
-    closeOverlays,
-    isAdmin,
-    createCommunityPost,
-    saveProfile,
-    createReservation,
-    loadBusySlots,
     findNearbyCourts,
-    signOut,
   };
 
-  return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;
+  return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;
 }
 
-export function useAppData() {
-  const value = useContext(AppDataContext);
-  if (!value) throw new Error("useAppData must be used within AppDataProvider");
+export function useDashboard() {
+  const value = useContext(DashboardContext);
+  if (!value) throw new Error("useDashboard must be used within DashboardProvider");
   return value;
 }

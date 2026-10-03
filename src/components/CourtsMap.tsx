@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Linking, StyleSheet, Text, View } from "react-native";
 import { WebView, WebViewMessageEvent } from "react-native-webview";
 import { CourtLocation, generateLeafletHtml } from "./leafletMapHtml";
 
@@ -27,6 +27,17 @@ export default function CourtsMap({ courts, onCourtPress }: CourtsMapProps) {
     }
   };
 
+  // Intercept external link navigation (e.g. the OSM "Directions" anchor in the popup)
+  // and open it in the system browser instead of inside the WebView.
+  const handleShouldStartLoadWithRequest = (request: { url: string }) => {
+    const url = request.url;
+    if (url && url !== "about:blank" && !url.startsWith("about:")) {
+      Linking.openURL(url).catch(() => {});
+      return false;
+    }
+    return true;
+  };
+
   return (
     <View style={styles.container}>
       <WebView
@@ -37,6 +48,8 @@ export default function CourtsMap({ courts, onCourtPress }: CourtsMapProps) {
         javaScriptEnabled
         domStorageEnabled
         startInLoadingState
+        // Open external links (e.g. OSM Directions) in the system browser
+        onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
         renderLoading={() => (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="small" color="#E3EF26" />

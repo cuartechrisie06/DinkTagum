@@ -1,3 +1,8 @@
+-- DEPRECATED — do not run this file.
+--
+-- Canonical schema and seed data live in supabase/migrations/. Kept only for
+-- historical reference.
+--
 -- Run once in Supabase Dashboard > SQL Editor.
 -- Adds map coordinates if needed, updates matching existing court names,
 -- and inserts four Tagum City sample courts only when they are absent.

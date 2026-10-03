@@ -1,4 +1,4 @@
-import { DirectoryScreen } from "../src/screens/DinkScreens";
+import { DirectoryScreen } from "../src/screens/PlayersScreen";
 import { RouteErrorState } from "../src/components/AppShell";
 
 export default function DirectoryRoute() {

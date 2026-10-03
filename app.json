@@ -35,13 +35,20 @@
     "plugins": [
       "expo-router",
       "expo-status-bar",
-      "expo-sqlite",
       [
         "expo-location",
         {
           "locationWhenInUsePermission": "Allow DinkTagum to use your location to show nearby pickleball courts."
         }
-      ]
+      ],
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow DinkTagum to access your photos to set a profile picture or share a game photo."
+        }
+      ],
+      "expo-font"
     ]
   }
 }

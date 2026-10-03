@@ -1,4 +1,4 @@
-import { ProfileScreen } from "../src/screens/DinkScreens";
+import { ProfileScreen } from "../src/screens/ProfileScreen";
 import { RouteErrorState } from "../src/components/AppShell";
 
 export default function ProfileRoute() {

@@ -27,7 +27,9 @@ export function generateLeafletHtml(courts: CourtLocation[]): string {
     }))
     .filter((c) => Number.isFinite(c.latitude) && Number.isFinite(c.longitude));
 
-  const courtsJson = JSON.stringify(mappableCourts);
+  // Escaping "<" prevents a court field containing "</script>" from breaking out of the
+  // inline <script> tag below when this JSON is embedded directly into the HTML document.
+  const courtsJson = JSON.stringify(mappableCourts).replace(/</g, "\\u003c");
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -95,9 +97,12 @@ export function generateLeafletHtml(courts: CourtLocation[]): string {
       font-weight: 600;
       font-size: 11px;
     }
+    .court-popup-actions {
+      display: flex;
+      gap: 6px;
+    }
     .court-popup-btn {
-      display: block;
-      width: 100%;
+      flex: 1;
       background-color: #078B68;
       color: #FFFDEE;
       text-align: center;
@@ -111,6 +116,26 @@ export function generateLeafletHtml(courts: CourtLocation[]): string {
     }
     .court-popup-btn:active {
       background-color: #05664d;
+    }
+    .court-popup-dir-btn {
+      flex: 1;
+      background-color: rgba(226,251,206,0.10);
+      color: #E2FBCE;
+      text-align: center;
+      padding: 6px 0;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      border: 1px solid rgba(226,251,206,0.25);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background-color 0.15s ease;
+    }
+    .court-popup-dir-btn:active {
+      background-color: rgba(226,251,206,0.18);
     }
     /* Custom Pin Marker */
     .custom-court-marker {
@@ -156,10 +181,16 @@ export function generateLeafletHtml(courts: CourtLocation[]): string {
         attributionControl: true
       }).setView([TAGUM_LAT, TAGUM_LNG], TAGUM_ZOOM);
 
-      // OpenStreetMap standard tile layer
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      // Esri "World Street Map" basemap: free, no API key required, and colorful
+      // (roads, parks, water) instead of the flat dark-gray canvas previously used
+      // here. Both tile.openstreetmap.org and Wikimedia's OSM mirror were tried
+      // first but return 403 Forbidden for this app's requests; this Esri REST
+      // tile service (same host family as the dark-gray canvas it replaces) was
+      // verified working (confirmed HTTP 200) and does not require a key, unlike
+      // Esri's newer vector basemap/location services.
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
         maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        attribution: 'Tiles &copy; <a href="https://www.esri.com">Esri</a> &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom'
       }).addTo(map);
 
       // Post message back to React Native or Web parent
@@ -175,6 +206,14 @@ export function generateLeafletHtml(courts: CourtLocation[]): string {
 
       window.notifyCourtSelected = notifyCourtSelected;
 
+      // Escape any court field before it is concatenated into an HTML string, since
+      // court data comes from the database and must never be trusted as raw markup.
+      function escapeHtml(value) {
+        return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, function(ch) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+        });
+      }
+
       // Add markers for Tagum courts
       courts.forEach(function(court) {
         var markerHtml = '<div class="court-pin" style="background-color: ' + court.statusColor + ';">' +
@@ -189,15 +228,27 @@ export function generateLeafletHtml(courts: CourtLocation[]): string {
           popupAnchor: [0, -32]
         });
 
-        var popupContent = '<div class="court-popup-title">' + (court.name || 'Pickleball Court') + '</div>' +
+        var osmUrl = 'https://www.openstreetmap.org/directions?engine=osrm_car&route=;' + court.latitude + ',' + court.longitude + '#map=16/' + court.latitude + '/' + court.longitude;
+
+        var popupContent = '<div class="court-popup-title">' + escapeHtml(court.name || 'Pickleball Court') + '</div>' +
           '<div class="court-popup-meta">' +
-          '  <span class="court-popup-badge" style="background-color: ' + court.statusColor + ';">' + (court.status || 'Available') + '</span>' +
-          '  <span class="court-popup-rating">★ ' + (court.rating || '—') + '</span>' +
+          '  <span class="court-popup-badge" style="background-color: ' + court.statusColor + ';">' + escapeHtml(court.status || 'Available') + '</span>' +
+          '  <span class="court-popup-rating">★ ' + escapeHtml(court.rating || '—') + '</span>' +
           '</div>' +
-          '<button class="court-popup-btn" onclick="notifyCourtSelected(\\'' + court.id + '\\')">View Details</button>';
+          '<div class="court-popup-actions">' +
+          '  <button class="court-popup-btn" data-court-id="' + escapeHtml(String(court.id)) + '">View Details</button>' +
+          '  <a class="court-popup-dir-btn" href="' + osmUrl + '" target="_blank" rel="noopener noreferrer">Directions</a>' +
+          '</div>';
 
         var marker = L.marker([court.latitude, court.longitude], { icon: customIcon }).addTo(map);
         marker.bindPopup(popupContent);
+
+        // The button's click is wired up after the popup opens (rather than an inline
+        // onclick attribute) so the court id never has to be embedded as HTML markup.
+        marker.on('popupopen', function(e) {
+          var btn = e.popup.getElement() && e.popup.getElement().querySelector('.court-popup-btn');
+          if (btn) btn.addEventListener('click', function() { notifyCourtSelected(court.id); });
+        });
 
         marker.on('click', function() {
           notifyCourtSelected(court.id);

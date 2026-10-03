@@ -35,6 +35,10 @@ export default function CourtsMap({ courts, onCourtPress }: CourtsMapProps) {
     <View style={styles.container}>
       <iframe
         srcDoc={htmlContent}
+        // No allow-same-origin: the map iframe runs in an isolated opaque origin and can
+        // only talk back to this page via postMessage, even if its content were ever compromised.
+        // allow-popups is added so the "Directions" link can open OSM in a new tab.
+        sandbox="allow-scripts allow-popups"
         style={{
           width: "100%",
           height: "100%",

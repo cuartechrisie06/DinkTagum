@@ -62,6 +62,21 @@ grant execute on function public.court_busy_slots(uuid, timestamptz, timestamptz
 
 create extension if not exists btree_gist;
 
+-- `start_time + interval '1 hour'` is STABLE, not IMMUTABLE (the timestamptz + interval
+-- operator is classified that way in general, since interval arithmetic can depend on the
+-- session TimeZone setting for calendar-relative components). GiST exclusion constraints
+-- require their expressions to be provably IMMUTABLE, so the fixed one-hour default is
+-- wrapped in its own IMMUTABLE function — safe here because a plain "hours" interval has
+-- no calendar-relative component and is genuinely timezone-independent.
+create or replace function public.reservation_effective_end(start_time timestamptz, end_time timestamptz)
+returns timestamptz
+language sql
+immutable
+set search_path = ''
+as $$
+  select coalesce(end_time, start_time + interval '1 hour');
+$$;
+
 do $$
 begin
   if not exists (
@@ -76,7 +91,7 @@ begin
         court_id with =,
         tstzrange(
           start_time,
-          coalesce(end_time, start_time + interval '1 hour'),
+          public.reservation_effective_end(start_time, end_time),
           '[)'
         ) with &&
       )

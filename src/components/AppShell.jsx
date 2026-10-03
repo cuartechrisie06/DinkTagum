@@ -1,6 +1,7 @@
 import React, { Component, createContext, useContext } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 
 export const appTheme = {
   background: "#06231D",
@@ -27,8 +28,26 @@ export function useAppTheme() {
 
 export function LoadingState({ label = "Loading…", fullScreen = true }) {
   const theme = useAppTheme();
+  // Branded full-screen loading: app icon + name + tagline + spinner.
+  // Falls back to a compact inline spinner when fullScreen=false.
+  if (fullScreen) {
+    return (
+      <View style={[styles.center, styles.fullScreen]} accessibilityRole="progressbar" accessibilityLabel={label}>
+        {/* App icon */}
+        <View style={styles.brandIcon}>
+          <Ionicons name="tennisball" size={40} color={theme.primary} />
+        </View>
+        {/* App name */}
+        <Text style={styles.brandName}>DinkTagum</Text>
+        {/* Tagline */}
+        <Text style={styles.brandTagline}>Tagum City's Pickleball Hub</Text>
+        {/* Spinner with gap */}
+        <ActivityIndicator color={theme.primary} style={{ marginTop: 32 }} />
+      </View>
+    );
+  }
   return (
-    <View style={[styles.center, fullScreen && styles.fullScreen]} accessibilityRole="progressbar" accessibilityLabel={label}>
+    <View style={styles.center} accessibilityRole="progressbar" accessibilityLabel={label}>
       <ActivityIndicator color={theme.primary} />
       <Text style={[styles.message, { color: theme.text }]}>{label}</Text>
     </View>
@@ -72,4 +91,26 @@ const styles = StyleSheet.create({
   message: { fontSize: 14, lineHeight: 20, marginTop: 8, textAlign: "center" },
   action: { borderRadius: 12, marginTop: 20, paddingHorizontal: 16, paddingVertical: 11 },
   actionText: { color: appTheme.background, fontWeight: "700" },
+  // Branded loading screen
+  brandIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 24,
+    backgroundColor: "rgba(227,239,38,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20,
+  },
+  brandName: {
+    color: appTheme.text,
+    fontSize: 32,
+    fontWeight: "800",
+    letterSpacing: -0.8,
+  },
+  brandTagline: {
+    color: appTheme.mutedText,
+    fontSize: 14,
+    marginTop: 6,
+    letterSpacing: 0.1,
+  },
 });

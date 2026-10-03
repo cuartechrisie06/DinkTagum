@@ -1,4 +1,4 @@
-import { FeedScreen } from "../src/screens/DinkScreens";
+import { FeedScreen } from "../src/screens/FeedScreen";
 import { RouteErrorState } from "../src/components/AppShell";
 
 export default function FeedRoute() {
