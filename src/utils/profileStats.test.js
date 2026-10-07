@@ -48,3 +48,15 @@ describe("matchHistoryFromRecords", () => {
     expect(history[0]).toEqual({ id: 0, opponent: "Opponent 0", playerScore: 11, opponentScore: 0, result: "win", playedOn: "2026-01-01" });
   });
 });
+
+describe("currentStreak", () => {
+  const { currentStreak } = require("./profileStats");
+  it("counts consecutive results from the newest match", () => {
+    expect(currentStreak([{ result: "win" }, { result: "win" }, { result: "loss" }, { result: "win" }])).toEqual({ result: "win", count: 2 });
+    expect(currentStreak([{ result: "loss" }])).toEqual({ result: "loss", count: 1 });
+  });
+
+  it("is null without games", () => {
+    expect(currentStreak([])).toBeNull();
+  });
+});

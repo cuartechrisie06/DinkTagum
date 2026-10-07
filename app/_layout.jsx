@@ -8,40 +8,29 @@ import { AuthProvider, useAuth } from "../src/context/AuthContext";
 import { DashboardProvider } from "../src/context/DashboardContext";
 import { CommunityFeedProvider } from "../src/context/CommunityFeedContext";
 import { GameRecordsProvider } from "../src/context/GameRecordsContext";
+import { OpenPlayProvider } from "../src/context/OpenPlayContext";
 import { OverlayNavProvider, useOverlayNav } from "../src/context/OverlayNavContext";
+import { TabBar } from "../src/components/TabBar";
 import { AppOverlays } from "../src/screens/AppOverlays";
 import { AuthScreen, ResetPasswordScreen } from "../src/screens/AuthScreen";
-
-const icons = {
-  index: ["home", "home-outline"],
-  courts: ["tennisball", "tennisball-outline"],
-  feed: ["chatbubbles", "chatbubbles-outline"],
-  history: ["time", "time-outline"],
-  directory: ["people", "people-outline"],
-  profile: ["person-circle", "person-circle-outline"],
-};
+import { SheetHost, ToastHost } from "../src/components/Feedback";
 
 function SignedInApp() {
   const { hasOverlay } = useOverlayNav();
   return (
     <View style={{ flex: 1 }}>
-      <Tabs backBehavior="history" screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarActiveTintColor: appTheme.primary,
-        tabBarInactiveTintColor: appTheme.mutedText,
-        tabBarStyle: hasOverlay
-          ? { display: "none" }
-          : { backgroundColor: appTheme.card, borderTopColor: "rgba(226,251,206,0.12)", paddingTop: 4 },
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "700" },
-        tabBarIcon: ({ color, focused }) => {
-          const [active, idle] = icons[route.name] || ["ellipse", "ellipse-outline"];
-          return <Ionicons name={focused ? active : idle} size={22} color={color} />;
-        },
-      })}>
+      <Tabs
+        backBehavior="history"
+        tabBar={(props) => <TabBar {...props} hidden={hasOverlay} />}
+        screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: appTheme.background } }}
+      >
         <Tabs.Screen name="index" options={{ title: "Home" }} />
         <Tabs.Screen name="courts" options={{ title: "Courts" }} />
         <Tabs.Screen name="feed" options={{ title: "Feed" }} />
-        <Tabs.Screen name="history" options={{ title: "History" }} />
+        {/* Not in the dock (5 tabs max): opened from Profile → "Matches & bookings",
+            Home's "Log match", and reservation/match notifications. /history
+            still works as a link. */}
+        <Tabs.Screen name="history" options={{ title: "History", href: null }} />
         <Tabs.Screen name="directory" options={{ title: "Players" }} />
         <Tabs.Screen name="profile" options={{ title: "Profile" }} />
       </Tabs>
@@ -75,9 +64,11 @@ function RootNavigator() {
     <DashboardProvider key={session.user.id}>
       <CommunityFeedProvider key={session.user.id}>
         <GameRecordsProvider key={session.user.id}>
-          <OverlayNavProvider key={session.user.id}>
-            <SignedInApp />
-          </OverlayNavProvider>
+          <OpenPlayProvider key={session.user.id}>
+            <OverlayNavProvider key={session.user.id}>
+              <SignedInApp />
+            </OverlayNavProvider>
+          </OpenPlayProvider>
         </GameRecordsProvider>
       </CommunityFeedProvider>
     </DashboardProvider>
@@ -98,6 +89,9 @@ export default function RootLayout() {
         <AuthProvider>
           <RootNavigator />
         </AuthProvider>
+        {/* Toasts and bottom sheets for notify()/confirmAction() (utils/confirm). */}
+        <ToastHost />
+        <SheetHost />
       </AppErrorBoundary>
     </AppShell>
   );

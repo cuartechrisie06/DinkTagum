@@ -37,3 +37,57 @@ export function relativeTime(value) {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
+
+// "Today · 4:00 PM", "Tomorrow · 6:00 AM", or "Sat, Oct 10 · 4:00 PM".
+export function gameTimeLabel(value, now = Date.now()) {
+  const start = new Date(value);
+  const startDay = new Date(start);
+  startDay.setHours(0, 0, 0, 0);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const dayDiff = Math.round((startDay.getTime() - today.getTime()) / 86400000);
+  const day = dayDiff === 0 ? "Today" : dayDiff === 1 ? "Tomorrow" : start.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  return `${day} · ${start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+// Matches the 1.0–5.0 self-rating scale used on profiles.
+export function skillTier(level) {
+  const value = Number(level || 3);
+  if (value < 2.5) return "Beginner";
+  if (value < 3.0) return "Developing";
+  if (value < 4.0) return "Intermediate";
+  if (value < 4.5) return "Advanced";
+  return "Expert";
+}
+
+// "Today", "Yesterday", or "Mon, Oct 5" for chat day dividers and
+// notification groups.
+export function dayLabel(value, now = Date.now()) {
+  const day = new Date(value);
+  day.setHours(0, 0, 0, 0);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today.getTime() - day.getTime()) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return day.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+export function clockTime(value) {
+  return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+// Chat: a timestamp closes each burst — shown when the next message is from
+// someone else, more than 5 minutes later, or there is no next message.
+export function endsMessageGroup(message, next) {
+  if (!next) return true;
+  if (next.sender_id !== message.sender_id) return true;
+  return new Date(next.created_at) - new Date(message.created_at) > 5 * 60 * 1000;
+}
+
+// Groups rows with created_at into [{ title, data }] sections (Today / Earlier).
+export function groupByRecency(rows, now = Date.now()) {
+  const today = rows.filter((row) => dayLabel(row.created_at, now) === "Today");
+  const earlier = rows.filter((row) => dayLabel(row.created_at, now) !== "Today");
+  return [{ title: "Today", data: today }, { title: "Earlier", data: earlier }].filter((section) => section.data.length);
+}

@@ -6,7 +6,7 @@ module.exports = defineConfig([
   globalIgnores(['dist/*', '.expo/*', '.expo-*/*', 'node_modules/*', 'supabase/*']),
   expoConfig,
   {
-    files: ['**/*.test.js', '**/*.test.jsx'],
+    files: ['**/*.test.js', '**/*.test.jsx', 'jest.setup.js'],
     languageOptions: {
       globals: globals.jest,
     },

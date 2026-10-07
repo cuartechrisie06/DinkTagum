@@ -1,8 +1,9 @@
-import React, { useState } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import { ActivityIndicator, Animated, Image, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
+import { ratingLabel } from "../utils/courts";
 
 export const C = {
   ink: "#06231D",
@@ -22,17 +23,80 @@ export const C = {
 
 // Shared spacing / radius scale so every screen lines up on the same grid.
 export const S = { xs: 4, sm: 8, md: 12, lg: 16, xl: 20, xxl: 28 };
-export const R = { sm: 10, md: 14, lg: 18, xl: 24, pill: 999 };
+export const R = { sm: 12, md: 16, lg: 20, xl: 26, pill: 999 };
 
 export function profileName(profile, user) {
   return profile?.display_name || user?.user_metadata?.display_name || user?.email?.split("@")[0] || "Player";
 }
 
+// Every tab screen sits on the same backdrop: a soft brand-green glow at the
+// top that fades into the ink background, which gives the flat dark UI depth.
 export function ScreenFrame({ children }) {
   return (
     <View style={{ flex: 1, backgroundColor: C.ink }}>
       <StatusBar barStyle="light-content" />
+      <LinearGradient pointerEvents="none" colors={["rgba(7,102,83,0.55)", "rgba(7,102,83,0.12)", "rgba(6,35,29,0)"]} locations={[0, 0.45, 1]} style={styles.backdropGlow} />
       {children}
+    </View>
+  );
+}
+
+// Illustrated pickleball court used wherever a court has no photo: baselines,
+// net, kitchen (non-volley zone) lines and centre service lines, to scale.
+export function CourtArt({ compact }) {
+  return (
+    <LinearGradient colors={["#0C6B56", "#08463A"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[StyleSheet.absoluteFillObject, { alignItems: "center", justifyContent: "center" }]}>
+      <View style={[styles.courtArtSurface, { width: compact ? "74%" : "66%" }]}>
+        <View style={[styles.courtArtKitchen, { left: "34.1%" }]} />
+        <View style={[styles.courtArtKitchen, { left: "65.9%" }]} />
+        <View style={[styles.courtArtCenter, { left: 0, right: "65.9%" }]} />
+        <View style={[styles.courtArtCenter, { left: "65.9%", right: 0 }]} />
+        <View style={styles.courtArtNet} />
+        <View style={styles.courtArtBall} />
+      </View>
+    </LinearGradient>
+  );
+}
+
+// Pulsing placeholder block shown while content loads.
+export function Skeleton({ width = "100%", height = 16, radius = R.sm, style }) {
+  const [pulse] = useState(() => new Animated.Value(0.45));
+  useEffect(() => {
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(pulse, { toValue: 0.9, duration: 700, useNativeDriver: true }),
+      Animated.timing(pulse, { toValue: 0.45, duration: 700, useNativeDriver: true }),
+    ]));
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+  return <Animated.View style={[{ width, height, borderRadius: radius, backgroundColor: C.surface2, opacity: pulse }, style]} />;
+}
+
+export function CourtCardSkeleton({ compact }) {
+  return (
+    <View style={[styles.courtCard, compact && { width: 248, marginRight: S.md }]} accessibilityLabel="Loading court">
+      <Skeleton height={compact ? 112 : 140} radius={0} />
+      <View style={{ padding: S.md, gap: S.sm }}>
+        <Skeleton width="70%" height={16} />
+        <Skeleton width="45%" height={12} />
+        <View style={{ flexDirection: "row", gap: 6 }}><Skeleton width={64} height={20} radius={R.pill} /><Skeleton width={56} height={20} radius={R.pill} /><Skeleton width={60} height={20} radius={R.pill} /></View>
+      </View>
+    </View>
+  );
+}
+
+export function PostCardSkeleton() {
+  return (
+    <View style={[styles.postCard, { marginBottom: S.md }]}>
+      <View style={{ flexDirection: "row", alignItems: "center" }}>
+        <Skeleton width={38} height={38} radius={19} />
+        <View style={{ marginLeft: S.md, gap: 6, flex: 1 }}>
+          <Skeleton width="40%" height={13} />
+          <Skeleton width="22%" height={10} />
+        </View>
+      </View>
+      <Skeleton height={13} style={{ marginTop: S.md }} />
+      <Skeleton width="75%" height={13} style={{ marginTop: 8 }} />
     </View>
   );
 }
@@ -57,6 +121,9 @@ export function StatusPill({ status }) {
 }
 
 export function Avatar({ initials, size = 40, ring, uri }) {
+  // Falls back to initials when the image URL is broken or unreachable.
+  const [failedUri, setFailedUri] = useState(null);
+  const showImage = uri && failedUri !== uri;
   return (
     <View style={{
       width: size, height: size, borderRadius: size / 2, backgroundColor: C.brand,
@@ -64,7 +131,7 @@ export function Avatar({ initials, size = 40, ring, uri }) {
       borderWidth: ring ? 2 : 0, borderColor: C.volt,
       overflow: "hidden",
     }}>
-      {uri ? <Image source={{ uri }} style={{ width: "100%", height: "100%" }} /> : <Text style={{ color: C.mist, fontWeight: "700", fontSize: size * 0.36 }}>{initials}</Text>}
+      {showImage ? <Image source={{ uri }} style={{ width: "100%", height: "100%" }} onError={() => setFailedUri(uri)} accessibilityIgnoresInvertColors /> : <Text style={{ color: C.mist, fontWeight: "700", fontSize: size * 0.36 }}>{initials}</Text>}
     </View>
   );
 }
@@ -93,7 +160,10 @@ export function IconBtn({ name, onPress, accessibilityLabel, variant = "solid", 
       hitSlop={6}
     >
       <Icon name={name} size={19} color={solid ? C.ink : C.paper} />
-      {badge ? <View style={styles.iconBadge} /> : null}
+      {/* A number shows a count bubble; `true` shows a plain dot. */}
+      {typeof badge === "number" && badge > 0 ? (
+        <View style={styles.iconBadgeCount}><Text style={styles.iconBadgeText}>{badge > 99 ? "99+" : badge}</Text></View>
+      ) : badge === true ? <View style={styles.iconBadge} /> : null}
     </TouchableOpacity>
   );
 }
@@ -108,15 +178,15 @@ export function Button({ label, onPress, disabled, loading, variant = "primary",
     <Pressable
       onPress={onPress}
       disabled={disabled || loading}
-      style={({ pressed }) => [v.box, (disabled || loading) && { opacity: 0.5 }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }, style]}
+      style={({ pressed }) => [v.box, disabled && !loading && styles.btnDisabled, loading && { opacity: 0.75 }, pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] }, style]}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel || label}
       accessibilityState={{ disabled: Boolean(disabled || loading), busy: Boolean(loading) }}
     >
       {loading ? <ActivityIndicator color={v.fg} /> : (
         <View style={{ flexDirection: "row", alignItems: "center" }}>
-          {icon ? <Icon name={icon} size={17} color={v.fg} style={{ marginRight: 7 }} /> : null}
-          <Text style={v.text}>{label}</Text>
+          {icon ? <Icon name={icon} size={17} color={disabled ? C.textFaint : v.fg} style={{ marginRight: 7 }} /> : null}
+          <Text style={[v.text, disabled && { color: C.textFaint }]}>{label}</Text>
         </View>
       )}
     </Pressable>
@@ -174,6 +244,17 @@ export function ErrorNote({ children, style }) {
   );
 }
 
+// Inline message under a form field; renders nothing when there's no error.
+export function FieldError({ message }) {
+  if (!message) return null;
+  return (
+    <View style={styles.fieldErrorRow} accessibilityLiveRegion="polite">
+      <Icon name="alert-circle-outline" size={14} color={C.butter} />
+      <Text style={styles.fieldErrorText}>{message}</Text>
+    </View>
+  );
+}
+
 export function HeaderBar({ eyebrow, title, subtitle, onChat, onNotifications, chatBadge, notificationBadge, showBack }) {
   return (
     <View style={styles.headerRow}>
@@ -190,66 +271,173 @@ export function HeaderBar({ eyebrow, title, subtitle, onChat, onNotifications, c
       </View>
       {onChat || onNotifications ? (
         <View style={{ flexDirection: "row" }}>
-          {onChat ? <IconBtn name="chatbubble-ellipses-outline" variant="ghost" onPress={onChat} badge={chatBadge} accessibilityLabel={chatBadge ? "Open chats, unread messages" : "Open chats"} /> : null}
+          {onChat ? <IconBtn name="chatbubble-ellipses-outline" variant="ghost" onPress={onChat} badge={chatBadge} accessibilityLabel={chatBadge ? `Messages, ${chatBadge === true ? "unread" : `${chatBadge} unread`}` : "Messages"} /> : null}
           {onChat && onNotifications ? <View style={{ width: S.sm }} /> : null}
-          {onNotifications ? <IconBtn name="notifications-outline" variant="ghost" onPress={onNotifications} badge={notificationBadge} accessibilityLabel={notificationBadge ? "Open notifications, unread" : "Open notifications"} /> : null}
+          {onNotifications ? <IconBtn name="notifications-outline" variant="ghost" onPress={onNotifications} badge={notificationBadge} accessibilityLabel={notificationBadge ? `Notifications, ${notificationBadge === true ? "unread" : `${notificationBadge} unread`}` : "Notifications"} /> : null}
         </View>
       ) : null}
     </View>
   );
 }
 
-export function CourtCard({ c, onPress, compact }) {
-  const photo = c.photoUrls?.[0];
-  // When no distance has been calculated yet, show just the area name rather
-  // than "Distance unavailable" which looks like an error on every card.
-  const subtitle = c.dist && c.dist !== "Distance unavailable"
-    ? `${c.area} · ${c.dist}`
-    : c.area;
+// Swipeable photos (dots when there's more than one), or the drawn court.
+function CourtPhotos({ photos: allPhotos, compact, dimmed }) {
+  const [width, setWidth] = useState(0);
+  const [index, setIndex] = useState(0);
+  const [broken, setBroken] = useState([]);
+  const photos = allPhotos.filter((uri) => !broken.includes(uri));
+  const markBroken = (uri) => setBroken((current) => (current.includes(uri) ? current : [...current, uri]));
+  if (!photos.length) return <CourtArt compact={compact} />;
+  if (photos.length === 1) return <Image source={{ uri: photos[0] }} style={[StyleSheet.absoluteFillObject, dimmed && styles.dimmedPhoto]} onError={() => markBroken(photos[0])} accessibilityIgnoresInvertColors />;
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.85}
-      style={[styles.courtCard, compact && { width: 232, marginRight: S.md }]}
-      accessibilityRole="button"
-      accessibilityLabel={`${c.name}, ${c.area}, ${c.status}, rated ${c.rating}`}
-    >
-      <View style={[styles.courtThumb, compact && { height: 96 }]}>
-        {photo ? <Image source={{ uri: photo }} style={StyleSheet.absoluteFillObject} /> : (
-          <LinearGradient colors={[C.brand, C.surface2]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[StyleSheet.absoluteFillObject, { alignItems: "center", justifyContent: "center" }]}>
-            <Icon name="tennisball" size={28} color="rgba(227,239,38,0.55)" />
-          </LinearGradient>
-        )}
-        <View style={styles.courtThumbPill}><StatusPill status={c.status} /></View>
+    <View style={StyleSheet.absoluteFillObject} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+      {width ? (
+        <ScrollView
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          onMomentumScrollEnd={(e) => setIndex(Math.round(e.nativeEvent.contentOffset.x / width))}
+          onScroll={(e) => setIndex(Math.round(e.nativeEvent.contentOffset.x / width))}
+          scrollEventThrottle={64}
+          accessibilityLabel={`${photos.length} photos, swipe to see more`}
+        >
+          {photos.map((uri, i) => <Image key={`${uri}-${i}`} source={{ uri }} style={[{ width, height: "100%" }, dimmed && styles.dimmedPhoto]} onError={() => markBroken(uri)} accessibilityIgnoresInvertColors />)}
+        </ScrollView>
+      ) : null}
+      <View style={styles.photoDots} pointerEvents="none">
+        {photos.map((uri, i) => <View key={`${uri}-dot-${i}`} style={[styles.photoDot, i === index && styles.photoDotActive]} />)}
       </View>
-      <View style={{ padding: S.md, paddingTop: S.sm + 2 }}>
-        <Text style={styles.courtName} numberOfLines={1}>{c.name}</Text>
-        <View style={styles.courtFooterRow}>
-          <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-            <Icon name="location-outline" size={13} color={C.textDim} />
-            <Text style={styles.courtSub} numberOfLines={1}>{subtitle}</Text>
-          </View>
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
-            <Icon name="star" size={12} color={C.volt} />
-            <Text style={styles.courtRating}>{Number(c.rating || 0).toFixed(1)}</Text>
-          </View>
-        </View>
-      </View>
-    </TouchableOpacity>
+    </View>
   );
 }
 
-function PostAction({ icon, label, onPress, color = C.textDim }) {
+// "₱150/hr · 3 courts · Outdoor · 6 AM–10 PM" — only the parts we know.
+export function courtFacts(c, { compact } = {}) {
+  const facts = [];
+  if (c.hourlyRate !== null && c.hourlyRate !== undefined) facts.push(`₱${Math.round(c.hourlyRate)}/hr`);
+  facts.push(`${c.courts} court${c.courts === 1 ? "" : "s"}`);
+  if (c.surface) facts.push(c.surface);
+  if (!compact && c.lighting) facts.push("Lit");
+  return facts;
+}
+
+export function CourtCard({ c, onPress, compact, onToggleFavorite }) {
+  const photos = c.photoUrls || [];
+  const closedNow = c.status === "Closed" || c.openInfo?.open === false;
+  const distance = c.dist && c.dist !== "Distance unavailable" ? c.dist : null;
+  const facts = courtFacts(c, { compact });
+  // Footer: the next bookable slot when there is one, otherwise why not.
+  let footer = null;
+  if (c.openInfo?.temporary) footer = { icon: "close-circle-outline", text: "Temporarily closed", color: C.textDim };
+  else if (c.openInfo?.open === false) footer = { icon: "time-outline", text: c.openInfo.label, color: C.butter };
+  else if (c.nextSlot) footer = { icon: "flash", text: `Next slot: ${c.nextSlot.label}`, color: C.volt };
+  else if (c.status === "Full") footer = { icon: "people-outline", text: "Fully booked", color: C.butter };
+  else if (c.openInfo?.open) footer = { icon: "time-outline", text: c.openInfo.label, color: C.mist };
+
+  const label = [c.name, c.area, distance && `${distance} away`, c.status, footer?.text, ratingLabel(c) === "New" ? "not rated yet" : `rated ${ratingLabel(c)}`, ...facts].filter(Boolean).join(", ");
+
   return (
-    <TouchableOpacity onPress={onPress} style={styles.postAction} accessibilityRole="button" accessibilityLabel={label} hitSlop={6}>
+    <View style={[styles.courtCard, compact && { width: 248, marginRight: S.md }]}>
+      <Pressable
+        onPress={onPress}
+        style={({ pressed }) => [pressed && { opacity: 0.9 }]}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityHint="Opens court details"
+      >
+        <View style={[styles.courtThumb, compact && { height: 112 }]}>
+          <CourtPhotos photos={photos} compact={compact} dimmed={closedNow} />
+          {closedNow ? <View style={styles.courtDimmer} pointerEvents="none" /> : null}
+          <LinearGradient pointerEvents="none" colors={["rgba(6,35,29,0)", "rgba(6,35,29,0.6)"]} style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 48 }} />
+          <View style={styles.courtThumbPill} pointerEvents="none"><StatusPill status={c.status} /></View>
+          {distance ? <View style={styles.courtDistPill} pointerEvents="none"><Icon name="navigate" size={11} color={C.paper} /><Text style={styles.courtDistText}>{distance}</Text></View> : null}
+        </View>
+        <View style={{ padding: S.md, paddingTop: S.sm + 2 }}>
+          <View style={styles.courtFooterRow}>
+            <Text style={[styles.courtName, { flex: 1, marginRight: S.sm }]} numberOfLines={1}>{c.name}</Text>
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <Icon name="star" size={12} color={C.volt} />
+              <Text style={styles.courtRating}>{ratingLabel(c)}</Text>
+            </View>
+          </View>
+          <View style={[styles.courtFooterRow, { justifyContent: "flex-start" }]}>
+            <Icon name="location-outline" size={13} color={C.textDim} />
+            <Text style={styles.courtSub} numberOfLines={1}>{c.area}{!compact && c.hours && c.hours !== "Hours unavailable" ? ` · ${c.hours}` : ""}</Text>
+          </View>
+          <View style={styles.courtFacts}>
+            {facts.map((fact) => <View key={fact} style={styles.courtFact}><Text style={styles.courtFactText}>{fact}</Text></View>)}
+          </View>
+          {footer ? (
+            <View style={styles.courtNextRow}>
+              <Icon name={footer.icon} size={13} color={footer.color} />
+              <Text style={[styles.courtNextText, { color: footer.color }]} numberOfLines={1}>{footer.text}</Text>
+            </View>
+          ) : null}
+        </View>
+      </Pressable>
+      {onToggleFavorite ? (
+        <TouchableOpacity
+          onPress={() => onToggleFavorite(c.id)}
+          style={styles.favoriteBtn}
+          accessibilityRole="button"
+          accessibilityState={{ selected: c.isFavorite }}
+          accessibilityLabel={c.isFavorite ? `Remove ${c.name} from favorites` : `Add ${c.name} to favorites`}
+        >
+          <View style={styles.favoriteInner}><Icon name={c.isFavorite ? "heart" : "heart-outline"} size={18} color={c.isFavorite ? "#F0605D" : C.paper} /></View>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
+
+function PostAction({ icon, label, onPress, color = C.textDim, accessibilityLabel, selected }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.postAction} accessibilityRole="button" accessibilityLabel={accessibilityLabel || label} accessibilityState={selected === undefined ? undefined : { selected }}>
       <Icon name={icon} size={16} color={color} />
       <Text style={[styles.postActionText, { color }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
 
+// Full-screen, swipeable photo preview. Mounted only while open (react-native-web
+// stacks Modals in mount order, so this then lands above any overlay).
+export function PhotoViewer({ photos, startIndex = 0, onClose }) {
+  const [width, setWidth] = useState(0);
+  const [index, setIndex] = useState(startIndex);
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
+      <View style={styles.viewerBackdrop} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+        {width ? (
+          <ScrollView
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            contentOffset={{ x: startIndex * width, y: 0 }}
+            onMomentumScrollEnd={(e) => setIndex(Math.round(e.nativeEvent.contentOffset.x / width))}
+            onScroll={(e) => setIndex(Math.round(e.nativeEvent.contentOffset.x / width))}
+            scrollEventThrottle={64}
+          >
+            {photos.map((uri, i) => (
+              <View key={`${uri}-${i}`} style={{ width, justifyContent: "center" }}>
+                <Image source={{ uri }} style={{ width, height: "80%" }} resizeMode="contain" accessibilityLabel={`Photo ${i + 1} of ${photos.length}`} />
+              </View>
+            ))}
+          </ScrollView>
+        ) : null}
+        <TouchableOpacity onPress={onClose} style={styles.viewerClose} accessibilityRole="button" accessibilityLabel="Close photo">
+          <Icon name="close" size={22} color={C.paper} />
+        </TouchableOpacity>
+        {photos.length > 1 ? <Text style={styles.viewerCount}>{index + 1} / {photos.length}</Text> : null}
+      </View>
+    </Modal>
+  );
+}
+
 // Authors can edit/delete their own post; everyone else can report it.
-export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onToggleLike, onLoadComments, onAddComment, onDeleteComment }) {
+export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onToggleLike, onLoadComments, onAddComment, onDeleteComment, court, onOpenCourt }) {
+  const [viewerIndex, setViewerIndex] = useState(null);
+  const [brokenPhotos, setBrokenPhotos] = useState([]);
+  const photoUrls = (p.photoUrls || []).filter((uri) => !brokenPhotos.includes(uri));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(p.text);
   const [saving, setSaving] = useState(false);
@@ -310,15 +498,26 @@ export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onTog
           </View>
         </View>
       ) : <Text style={styles.postText} numberOfLines={compact ? 3 : undefined}>{p.text}</Text>}
-      {!compact && p.photoUrls?.length ? (
+      {court ? (
+        <TouchableOpacity onPress={() => onOpenCourt?.(court)} disabled={!onOpenCourt} style={styles.postCourtTag} accessibilityRole="button" accessibilityLabel={`Tagged at ${court.name}. Open court`}>
+          <Icon name="location" size={13} color={C.volt} />
+          <Text style={styles.postCourtTagText} numberOfLines={1}>{court.name}</Text>
+        </TouchableOpacity>
+      ) : null}
+      {!compact && photoUrls.length ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: S.md }}>
-          {p.photoUrls.map((uri, index) => <Image key={`${uri}-${index}`} source={{ uri }} style={[styles.postPhoto, p.photoUrls.length === 1 && styles.postPhotoSingle]} />)}
+          {photoUrls.map((uri, index) => (
+            <TouchableOpacity key={`${uri}-${index}`} onPress={() => setViewerIndex(index)} activeOpacity={0.85} accessibilityRole="imagebutton" accessibilityLabel={`View photo ${index + 1} of ${photoUrls.length}`}>
+              <Image source={{ uri }} style={[styles.postPhoto, photoUrls.length === 1 && styles.postPhotoSingle]} onError={() => setBrokenPhotos((current) => [...current, uri])} />
+            </TouchableOpacity>
+          ))}
         </ScrollView>
       ) : null}
+      {viewerIndex !== null ? <PhotoViewer photos={photoUrls} startIndex={viewerIndex} onClose={() => setViewerIndex(null)} /> : null}
       {!compact && !editing ? (
         <View style={styles.postActions}>
-          {onToggleLike ? <PostAction icon={p.likedByMe ? "heart" : "heart-outline"} color={p.likedByMe ? C.volt : C.textDim} label={p.likeCount ? `${p.likeCount} Like${p.likeCount === 1 ? "" : "s"}` : "Like"} onPress={() => onToggleLike(p.id, p.likedByMe)} /> : null}
-          {onLoadComments ? <PostAction icon="chatbubble-outline" label={p.commentCount ? `${p.commentCount} Comment${p.commentCount === 1 ? "" : "s"}` : "Comment"} onPress={toggleComments} /> : null}
+          {onToggleLike ? <PostAction icon={p.likedByMe ? "heart" : "heart-outline"} color={p.likedByMe ? C.volt : C.textDim} label={`${p.likeCount || 0} like${p.likeCount === 1 ? "" : "s"}`} selected={p.likedByMe} accessibilityLabel={`${p.likedByMe ? "Unlike" : "Like"}, ${p.likeCount || 0} like${p.likeCount === 1 ? "" : "s"}`} onPress={() => onToggleLike(p.id, p.likedByMe)} /> : null}
+          {onLoadComments ? <PostAction icon="chatbubble-outline" label={`${p.commentCount || 0} comment${p.commentCount === 1 ? "" : "s"}`} accessibilityLabel={`${p.commentCount || 0} comments. ${commentsOpen ? "Hide" : "Show"} comments`} onPress={toggleComments} /> : null}
           {isMine ? <>
             {onSave ? <PostAction icon="create-outline" label="Edit" onPress={() => { setDraft(p.text); setEditing(true); }} /> : null}
             {onDelete ? <PostAction icon="trash-outline" label="Delete" onPress={onDelete} /> : null}
@@ -348,8 +547,8 @@ export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onTog
           {onAddComment ? (
             <View style={styles.commentComposeRow}>
               <TextInput value={commentDraft} onChangeText={setCommentDraft} placeholder="Write a comment…" placeholderTextColor={C.textFaint} style={styles.commentInput} maxLength={1000} accessibilityLabel="Write a comment" />
-              <TouchableOpacity onPress={submitComment} disabled={!commentDraft.trim() || postingComment} style={[styles.commentSendBtn, (!commentDraft.trim() || postingComment) && { opacity: 0.5 }]} accessibilityRole="button" accessibilityLabel="Post comment">
-                {postingComment ? <ActivityIndicator color={C.ink} size="small" /> : <Icon name="send" size={14} color={C.ink} />}
+              <TouchableOpacity onPress={submitComment} disabled={!commentDraft.trim() || postingComment} style={[styles.commentSendBtn, !commentDraft.trim() && !postingComment && styles.sendBtnDisabled]} accessibilityRole="button" accessibilityLabel="Post comment">
+                {postingComment ? <ActivityIndicator color={C.ink} size="small" /> : <Icon name="send" size={14} color={commentDraft.trim() ? C.ink : C.textFaint} />}
               </TouchableOpacity>
             </View>
           ) : null}
@@ -409,16 +608,29 @@ export function PostCardCompact({ p, onPress }) {
 const card = { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line };
 
 export const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: C.ink },
+  inputError: { borderColor: C.butter },
+  fieldErrorRow: { flexDirection: "row", alignItems: "flex-start", gap: 6, marginTop: 4 },
+  fieldErrorText: { color: C.butter, fontSize: 12.5, lineHeight: 17, flex: 1 },
+  screen: { flex: 1, backgroundColor: "transparent" },
+  backdropGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 320 },
+  courtArtSurface: { aspectRatio: 2.2, borderWidth: 2, borderColor: "rgba(255,253,238,0.75)", borderRadius: 3, backgroundColor: "rgba(7,102,83,0.6)" },
+  courtArtKitchen: { position: "absolute", top: 0, bottom: 0, width: 2, marginLeft: -1, backgroundColor: "rgba(255,253,238,0.75)" },
+  courtArtCenter: { position: "absolute", top: "50%", height: 2, marginTop: -1, backgroundColor: "rgba(255,253,238,0.75)" },
+  courtArtNet: { position: "absolute", top: -6, bottom: -6, left: "50%", width: 3, marginLeft: -1.5, borderRadius: 2, backgroundColor: C.volt },
+  courtArtBall: { position: "absolute", top: "22%", left: "18%", width: 9, height: 9, borderRadius: 5, backgroundColor: C.volt, shadowColor: C.volt, shadowOpacity: 0.8, shadowRadius: 6, shadowOffset: { width: 0, height: 0 } },
+  courtDistPill: { position: "absolute", bottom: S.sm + 2, right: S.sm + 2, flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "rgba(6,35,29,0.75)", borderRadius: R.pill, paddingHorizontal: 9, paddingVertical: 4 },
+  courtDistText: { color: C.paper, fontSize: 11.5, fontWeight: "700" },
   pill: { flexDirection: "row", alignItems: "center", paddingHorizontal: 9, paddingVertical: 4, borderRadius: R.pill },
   pillDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
   pillText: { fontSize: 11.5, fontWeight: "700" },
   sectionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   sectionTitle: { color: C.paper, fontSize: 17, fontWeight: "700", letterSpacing: -0.2 },
   sectionAction: { color: C.volt, fontSize: 13, fontWeight: "700" },
-  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: C.volt, alignItems: "center", justifyContent: "center" },
+  iconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: C.volt, alignItems: "center", justifyContent: "center" },
   iconBtnGhost: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line },
   iconBadge: { position: "absolute", top: 9, right: 10, width: 8, height: 8, borderRadius: 4, backgroundColor: C.volt, borderWidth: 1.5, borderColor: C.surface },
+  iconBadgeCount: { position: "absolute", top: -4, right: -4, minWidth: 20, height: 20, borderRadius: 10, paddingHorizontal: 5, backgroundColor: C.volt, borderWidth: 2, borderColor: C.ink, alignItems: "center", justifyContent: "center" },
+  iconBadgeText: { color: C.ink, fontSize: 10.5, fontWeight: "800" },
   headerRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: S.xl, paddingTop: S.xl + 4 },
   headerEyebrow: { color: C.textDim, fontSize: 14, fontWeight: "600", marginBottom: 2 },
   headerTitle: { color: C.paper, fontSize: 26, fontWeight: "800", letterSpacing: -0.5 },
@@ -440,6 +652,7 @@ export const styles = StyleSheet.create({
   btnSecondary: { minHeight: 40, paddingHorizontal: S.lg, borderRadius: R.sm, backgroundColor: C.brand, alignItems: "center", justifyContent: "center" },
   btnGhost: { minHeight: 40, paddingHorizontal: S.lg, borderRadius: R.sm, borderWidth: 1, borderColor: C.lineStrong, alignItems: "center", justifyContent: "center" },
   btnSecondaryText: { color: C.mist, fontSize: 13.5, fontWeight: "700" },
+  btnDisabled: { backgroundColor: C.surface2, borderColor: C.line },
 
   loginTitle: { color: C.paper, fontSize: 28, fontWeight: "800", letterSpacing: -0.5 },
   loginSub: { color: C.textDim, fontSize: 14.5, marginTop: 6 },
@@ -449,7 +662,7 @@ export const styles = StyleSheet.create({
   authNotice: { color: C.mist, fontSize: 13.5, lineHeight: 19, textAlign: "center", marginTop: S.lg },
   signupText: { textAlign: "center", fontSize: 14, color: C.textDim, marginTop: S.xl },
 
-  reservationCard: { borderRadius: R.xl, padding: S.xl, marginHorizontal: S.xl, marginTop: S.xl, overflow: "hidden" },
+  reservationCard: { borderRadius: R.xl, padding: S.xl, marginHorizontal: S.xl, marginTop: S.xl, overflow: "hidden", borderWidth: 1, borderColor: "rgba(227,239,38,0.18)" },
   reservationLabel: { color: C.volt, fontSize: 11.5, fontWeight: "800", letterSpacing: 1 },
   reservationName: { color: C.paper, fontSize: 19, fontWeight: "800", marginTop: 6, letterSpacing: -0.3 },
   reservationTime: { color: C.mist, fontSize: 14, marginTop: 4, opacity: 0.85 },
@@ -465,19 +678,36 @@ export const styles = StyleSheet.create({
   mapDescription: { color: C.textDim, fontSize: 13.5, lineHeight: 19, marginTop: 4 },
 
   courtCard: { ...card, borderRadius: R.lg, overflow: "hidden" },
-  courtThumb: { height: 132, backgroundColor: C.brand, overflow: "hidden" },
+  courtThumb: { height: 140, backgroundColor: C.brand, overflow: "hidden" },
   courtThumbPill: { position: "absolute", top: S.sm + 2, left: S.sm + 2, backgroundColor: "rgba(6,35,29,0.75)", borderRadius: R.pill },
   courtName: { color: C.paper, fontSize: 16, fontWeight: "700" },
   courtSub: { color: C.textDim, fontSize: 13, marginLeft: 3, flexShrink: 1 },
   courtRating: { color: C.paper, fontSize: 13, fontWeight: "700", marginLeft: 3 },
   courtFooterRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 5 },
+  courtFacts: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: S.sm },
+  courtFact: { backgroundColor: C.surface2, borderRadius: R.pill, paddingHorizontal: 8, paddingVertical: 3 },
+  courtFactText: { color: C.mist, fontSize: 11.5, fontWeight: "700" },
+  courtNextRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: S.sm, paddingTop: S.sm, borderTopWidth: 1, borderColor: C.line },
+  courtNextText: { fontSize: 12.5, fontWeight: "800", flexShrink: 1 },
+  courtDimmer: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(6,35,29,0.45)" },
+  dimmedPhoto: { opacity: 0.55 },
+  favoriteBtn: { position: "absolute", top: 2, right: 2, width: 48, height: 48, alignItems: "center", justifyContent: "center" },
+  favoriteInner: { width: 34, height: 34, borderRadius: 17, backgroundColor: "rgba(6,35,29,0.75)", alignItems: "center", justifyContent: "center" },
+  photoDots: { position: "absolute", bottom: 8, left: 0, right: 0, flexDirection: "row", justifyContent: "center", gap: 5 },
+  photoDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "rgba(255,253,238,0.45)" },
+  photoDotActive: { backgroundColor: C.paper, width: 14 },
 
   postCard: { ...card, borderRadius: R.lg, padding: S.lg },
   postName: { color: C.paper, fontSize: 15, fontWeight: "700" },
   postTime: { color: C.textFaint, fontSize: 12.5, marginTop: 1 },
   postText: { color: C.paper, fontSize: 15, lineHeight: 22, marginTop: S.md },
   postActions: { flexDirection: "row", alignItems: "center", marginTop: S.md, borderTopWidth: 1, borderColor: C.line, paddingTop: S.md },
-  postAction: { flexDirection: "row", alignItems: "center", marginRight: S.xl, paddingVertical: 2 },
+  postAction: { flexDirection: "row", alignItems: "center", marginRight: S.lg, minHeight: 44, paddingRight: S.xs },
+  postCourtTag: { flexDirection: "row", alignItems: "center", gap: 5, alignSelf: "flex-start", minHeight: 32, marginTop: S.sm, paddingHorizontal: 10, borderRadius: R.pill, backgroundColor: C.voltSoft, maxWidth: "100%" },
+  postCourtTagText: { color: C.volt, fontSize: 12.5, fontWeight: "700", flexShrink: 1 },
+  viewerBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.94)", justifyContent: "center" },
+  viewerClose: { position: "absolute", top: 40, right: 12, width: 48, height: 48, borderRadius: 24, backgroundColor: "rgba(255,253,238,0.12)", alignItems: "center", justifyContent: "center" },
+  viewerCount: { position: "absolute", bottom: 48, alignSelf: "center", color: C.paper, fontSize: 13, fontWeight: "700" },
   postActionText: { color: C.textDim, fontSize: 13, fontWeight: "600", marginLeft: 6 },
   postPhoto: { width: 200, height: 150, borderRadius: R.md, marginRight: S.sm, backgroundColor: C.surface2 },
   postPhotoSingle: { width: 300, height: 200 },
@@ -585,4 +815,5 @@ export const styles = StyleSheet.create({
   composeRow: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: S.lg, paddingVertical: S.md, borderTopWidth: 1, borderColor: C.line },
   messageInput: { flex: 1, backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderRadius: 22, paddingHorizontal: S.lg, paddingVertical: 11, marginRight: S.sm, fontSize: 15, color: C.paper, maxHeight: 110 },
   sendBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: C.volt, alignItems: "center", justifyContent: "center" },
+  sendBtnDisabled: { backgroundColor: C.surface2 },
 });

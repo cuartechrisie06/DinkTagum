@@ -7,6 +7,14 @@ import { useDashboard } from "./DashboardContext";
 
 const CommunityFeedContext = createContext(null);
 const POSTS_PAGE_SIZE = 20;
+const LEGACY_POST_COLUMNS = "id, author_id, body, photo_urls, created_at";
+// court_id comes from the court-tags migration; until it's applied the feed
+// falls back to LEGACY_POST_COLUMNS and hides court tagging.
+const POST_COLUMNS = `${LEGACY_POST_COLUMNS}, court_id`;
+
+function isMissingColumn(error) {
+  return error?.code === "42703" || /column .* does not exist/i.test(error?.message || "");
+}
 
 export function communityPostForDisplay(post, profilesById, currentUser, currentProfile, likesById = {}, commentCountById = {}) {
   const author = post.author_id === currentUser?.id ? currentProfile : profilesById[post.author_id];
@@ -29,6 +37,19 @@ export function CommunityFeedProvider({ children }) {
   const [postsError, setPostsError] = useState("");
   const [hasMorePosts, setHasMorePosts] = useState(false);
   const [loadingMorePosts, setLoadingMorePosts] = useState(false);
+  const [courtTagsSupported, setCourtTagsSupported] = useState(true);
+  const columnsRef = useRef(POST_COLUMNS);
+
+  const selectPosts = useCallback(async (from) => {
+    const query = (columns) => supabase.from("community_posts").select(columns).order("created_at", { ascending: false }).range(from, from + POSTS_PAGE_SIZE - 1);
+    let result = await query(columnsRef.current);
+    if (result.error && isMissingColumn(result.error) && columnsRef.current !== LEGACY_POST_COLUMNS) {
+      columnsRef.current = LEGACY_POST_COLUMNS;
+      setCourtTagsSupported(false);
+      result = await query(LEGACY_POST_COLUMNS);
+    }
+    return result;
+  }, []);
 
   // Likes/comment counts are fetched as raw rows and reduced client-side
   // rather than through a count-per-post RPC — simplest option at this
@@ -74,7 +95,7 @@ export function CommunityFeedProvider({ children }) {
   const loadFirstPage = useCallback(async () => {
     if (!supabase) return;
     setPostsLoading(true);
-    const { data: postRows, error: postError } = await supabase.from("community_posts").select("id, author_id, body, photo_urls, created_at").order("created_at", { ascending: false }).range(0, POSTS_PAGE_SIZE - 1);
+    const { data: postRows, error: postError } = await selectPosts(0);
     if (postError) {
       setPostsError(`Community posts could not be loaded: ${postError.message}`);
       setPostsLoading(false);
@@ -84,7 +105,7 @@ export function CommunityFeedProvider({ children }) {
     setHasMorePosts((postRows || []).length === POSTS_PAGE_SIZE);
     setPostsError("");
     setPostsLoading(false);
-  }, [hydratePosts]);
+  }, [hydratePosts, selectPosts]);
 
   useEffect(() => {
     if (!supabase) return undefined;
@@ -98,17 +119,19 @@ export function CommunityFeedProvider({ children }) {
     if (!supabase || loadingMorePosts || !hasMorePosts || !communityPosts.length) return;
     setLoadingMorePosts(true);
     const from = communityPosts.length;
-    const { data: postRows, error: postError } = await supabase.from("community_posts").select("id, author_id, body, photo_urls, created_at").order("created_at", { ascending: false }).range(from, from + POSTS_PAGE_SIZE - 1);
+    const { data: postRows, error: postError } = await selectPosts(from);
     setLoadingMorePosts(false);
     if (postError) { setPostsError(`More posts could not be loaded: ${postError.message}`); return; }
     const hydrated = await hydratePosts(postRows || []);
     setCommunityPosts((current) => [...current, ...hydrated]);
     setHasMorePosts((postRows || []).length === POSTS_PAGE_SIZE);
-  }, [loadingMorePosts, hasMorePosts, communityPosts.length, hydratePosts]);
+  }, [loadingMorePosts, hasMorePosts, communityPosts.length, hydratePosts, selectPosts]);
 
-  const createCommunityPost = useCallback(async (body, photoUrls = []) => {
+  const createCommunityPost = useCallback(async (body, photoUrls = [], courtId = null) => {
     if (!supabase) return false;
-    const { data, error } = await supabase.from("community_posts").insert({ author_id: userId, body, photo_urls: photoUrls }).select("id, author_id, body, photo_urls, created_at").single();
+    const row = { author_id: userId, body, photo_urls: photoUrls };
+    if (courtId && columnsRef.current === POST_COLUMNS) row.court_id = courtId;
+    const { data, error } = await supabase.from("community_posts").insert(row).select(columnsRef.current).single();
     if (error) { notify("Could not publish post", error.message); return false; }
     setCommunityPosts((current) => {
       if (current.some((post) => post.id === data.id)) return current;
@@ -121,7 +144,7 @@ export function CommunityFeedProvider({ children }) {
     if (!supabase) return false;
     const trimmed = body.trim();
     if (!trimmed) { notify("Post is empty", "Write something before saving."); return false; }
-    const { data, error } = await supabase.from("community_posts").update({ body: trimmed, updated_at: new Date().toISOString() }).eq("id", id).eq("author_id", userId).select("id, author_id, body, photo_urls, created_at").single();
+    const { data, error } = await supabase.from("community_posts").update({ body: trimmed, updated_at: new Date().toISOString() }).eq("id", id).eq("author_id", userId).select(columnsRef.current).single();
     if (error) { notify("Could not update post", error.message); return false; }
     setCommunityPosts((current) => current.map((post) => (post.id === id ? { ...post, body: data.body, text: data.body } : post)));
     return true;
@@ -205,7 +228,7 @@ export function CommunityFeedProvider({ children }) {
     communityPosts, postsLoading, postsError, hasMorePosts, loadingMorePosts, loadMorePosts,
     createCommunityPost, updateCommunityPost, deleteCommunityPost, reportCommunityPost,
     toggleLike, loadComments, addComment, deleteComment,
-    loadFirstPage,
+    loadFirstPage, courtTagsSupported,
   };
   return <CommunityFeedContext.Provider value={value}>{children}</CommunityFeedContext.Provider>;
 }

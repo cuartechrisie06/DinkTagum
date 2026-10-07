@@ -11,7 +11,18 @@ export function calculateProfileStats(gameRecords) {
     pointsAgainst,
     winRate: gameRecords.length ? Math.round((wins / gameRecords.length) * 100) : null,
     winLossRatio: losses ? (wins / losses).toFixed(2) : wins ? "Perfect" : "—",
+    streak: currentStreak(gameRecords),
   };
+}
+
+// Records arrive newest first. Returns e.g. { result: "win", count: 3 } for
+// three straight wins, or null with no games.
+export function currentStreak(gameRecords) {
+  if (!gameRecords.length) return null;
+  const result = gameRecords[0].result;
+  let count = 0;
+  while (count < gameRecords.length && gameRecords[count].result === result) count += 1;
+  return { result, count };
 }
 
 export function matchHistoryFromRecords(gameRecords, limit = 8) {

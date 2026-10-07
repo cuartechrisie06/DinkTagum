@@ -40,7 +40,7 @@ export function LoadingState({ label = "Loading…", fullScreen = true }) {
         {/* App name */}
         <Text style={styles.brandName}>DinkTagum</Text>
         {/* Tagline */}
-        <Text style={styles.brandTagline}>Tagum City's Pickleball Hub</Text>
+        <Text style={styles.brandTagline}>Tagum City&apos;s Pickleball Hub</Text>
         {/* Spinner with gap */}
         <ActivityIndicator color={theme.primary} style={{ marginTop: 32 }} />
       </View>

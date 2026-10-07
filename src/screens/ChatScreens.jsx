@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../context/AuthContext";
-import { initialsFor, isConversationUnread, relativeTime } from "../utils/format";
+import { clockTime, dayLabel, endsMessageGroup, initialsFor, isConversationUnread, relativeTime } from "../utils/format";
 import { Avatar, BackButton, C, EmptyCard, ErrorNote, Icon, OverlayHeader, S, styles } from "./shared";
 
 const MESSAGE_LIMIT = 50;
@@ -98,6 +98,23 @@ export function ChatThread({ convo, onBack }) {
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState("");
   const [body, setBody] = useState("");
+  // When the other person last opened this chat, for "Seen" under my messages.
+  const [otherLastRead, setOtherLastRead] = useState(null);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+    const me = session.user.id;
+    const applyRow = (row) => {
+      if (!row) return;
+      setOtherLastRead(row.user_a === me ? row.last_read_b : row.last_read_a);
+    };
+    supabase.from("conversations").select("user_a, user_b, last_read_a, last_read_b").eq("id", convo.id).maybeSingle().then(({ data }) => applyRow(data));
+    const channel = supabase
+      .channel(`conversation-read-${convo.id}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "conversations", filter: `id=eq.${convo.id}` }, (payload) => applyRow(payload.new))
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  }, [convo.id, session.user.id]);
 
   useEffect(() => {
     let active = true;
@@ -219,22 +236,37 @@ export function ChatThread({ convo, onBack }) {
               {loadingMore ? <ActivityIndicator color={C.volt} /> : <Text style={{ color: C.volt, fontSize: 13, fontWeight: "700" }}>Load earlier messages</Text>}
             </TouchableOpacity>
           ) : null}
-          {loading ? <ActivityIndicator color={C.volt} /> : messages.length ? messages.map((m) => (
-            <View key={m.id}>
-              <View style={[
-                styles.bubble,
-                m.sender_id === session.user.id ? styles.bubbleMine : styles.bubbleTheirs,
-                m.status === "sending" && { opacity: 0.6 },
-              ]}>
-                <Text style={[styles.bubbleText, { color: m.sender_id === session.user.id ? C.ink : C.paper }]}>{m.content}</Text>
+          {loading ? <ActivityIndicator color={C.volt} /> : messages.length ? messages.map((m, index) => {
+            const mine = m.sender_id === session.user.id;
+            const previous = messages[index - 1];
+            const next = messages[index + 1];
+            const newDay = !previous || dayLabel(previous.created_at) !== dayLabel(m.created_at);
+            const isLastMine = mine && !messages.slice(index + 1).some((later) => later.sender_id === session.user.id);
+            const seen = isLastMine && m.status !== "sending" && m.status !== "failed" && otherLastRead && new Date(otherLastRead) >= new Date(m.created_at);
+            const showMeta = m.status !== "failed" && (endsMessageGroup(m, next) || isLastMine);
+            return (
+              <View key={m.id}>
+                {newDay ? <Text style={chatStyles.dayDivider} accessibilityRole="header">{dayLabel(m.created_at)}</Text> : null}
+                <View
+                  style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, m.status === "sending" && { opacity: 0.6 }, showMeta && { marginBottom: 2 }]}
+                  accessibilityLabel={`${mine ? "You" : convo.name}: ${m.content}, ${clockTime(m.created_at)}${isLastMine ? (seen ? ", seen" : ", sent") : ""}`}
+                >
+                  <Text style={[styles.bubbleText, { color: mine ? C.ink : C.paper }]}>{m.content}</Text>
+                </View>
+                {showMeta ? (
+                  <Text style={[chatStyles.meta, { alignSelf: mine ? "flex-end" : "flex-start" }]}>
+                    {m.status === "sending" ? "Sending…" : clockTime(m.created_at)}
+                    {isLastMine && m.status !== "sending" ? (seen ? " · Seen" : " · Sent") : ""}
+                  </Text>
+                ) : null}
+                {m.status === "failed" ? (
+                  <TouchableOpacity onPress={() => retry(m)} accessibilityRole="button" accessibilityLabel="Message not sent, tap to retry" style={{ alignSelf: "flex-end", minHeight: 44, justifyContent: "center" }}>
+                    <Text style={{ color: C.butter, fontSize: 12 }}>Not sent · Tap to retry</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
-              {m.status === "failed" ? (
-                <TouchableOpacity onPress={() => retry(m)} accessibilityRole="button" accessibilityLabel="Message not sent, tap to retry">
-                  <Text style={{ color: C.butter, fontSize: 12, alignSelf: "flex-end", marginTop: -4, marginBottom: 8 }}>Not sent · Tap to retry</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          )) : error ? null : <View style={{ alignItems: "center", marginTop: S.xxl }}><Avatar initials={convo.initials} uri={convo.avatarUrl} size={64} /><Text style={[styles.emptyTitle, { marginTop: S.md }]}>{convo.name}</Text><Text style={styles.emptyMessage}>Say hello to start the conversation.</Text></View>}
+            );
+          }) : error ? null : <View style={{ alignItems: "center", marginTop: S.xxl }}><Avatar initials={convo.initials} uri={convo.avatarUrl} size={64} /><Text style={[styles.emptyTitle, { marginTop: S.md }]}>{convo.name}</Text><Text style={styles.emptyMessage}>Say hello to start the conversation.</Text></View>}
           <ErrorNote style={{ marginHorizontal: 0 }}>{error}</ErrorNote>
         </ScrollView>
         <View style={styles.composeRow}>
@@ -251,14 +283,19 @@ export function ChatThread({ convo, onBack }) {
           <TouchableOpacity
             onPress={send}
             disabled={!body.trim()}
-            style={[styles.sendBtn, !body.trim() && { opacity: 0.5 }]}
+            style={[styles.sendBtn, !body.trim() && styles.sendBtnDisabled]}
             accessibilityRole="button"
             accessibilityLabel="Send message"
           >
-            <Icon name="send" size={18} color={C.ink} />
+            <Icon name="send" size={18} color={body.trim() ? C.ink : C.textFaint} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
     </KeyboardAvoidingView>
   );
 }
+
+const chatStyles = StyleSheet.create({
+  dayDivider: { alignSelf: "center", color: C.textDim, fontSize: 11.5, fontWeight: "800", letterSpacing: 0.6, textTransform: "uppercase", marginVertical: S.md },
+  meta: { color: C.textFaint, fontSize: 11, marginBottom: S.sm, marginHorizontal: 4 },
+});

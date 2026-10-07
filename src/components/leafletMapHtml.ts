@@ -1,36 +1,76 @@
+// The Leaflet map page shared by the native WebView (CourtsMap.tsx) and the
+// web iframe (CourtsMap.web.tsx). The page is static; courts, the selected pin
+// and the player's location are pushed in as messages so updates don't reload
+// the map. Messages out: ready, court_selected, map_tap, map_moved.
+
 export type CourtLocation = {
   id: string;
   name: string;
   latitude: number | string | null;
   longitude: number | string | null;
   status: "Available" | "Full" | "Closed" | null;
-  rating: number | string | null;
+  rating?: number | string | null;
+  hourlyRate?: number | null;
 };
+
+export type MapPin = { id: string; lat: number; lng: number; status: string; label: string; name: string };
+export type MapBounds = { north: number; south: number; east: number; west: number };
+export type MapCommand =
+  | { type: "set_courts"; pins: MapPin[]; fit: boolean }
+  | { type: "select"; id: string | null }
+  | { type: "set_user"; lat: number; lng: number; center: boolean }
+  | { type: "fit" };
 
 export const TAGUM_LATITUDE = 7.4478;
 export const TAGUM_LONGITUDE = 125.8083;
-export const TAGUM_ZOOM = 14;
+export const TAGUM_ZOOM = 13;
 
-const statusColor = (status: CourtLocation["status"]) => {
-  if (status === "Full") return "#D94D4D";
-  if (status === "Closed") return "#89928F";
-  return "#078B68";
-};
+// Matches the legend in CourtsMapPanel.
+export const PIN_COLORS = { Available: "#3DD68C", Full: "#F0605D", Closed: "#8A938F" } as const;
 
-export function generateLeafletHtml(courts: CourtLocation[]): string {
-  const mappableCourts = courts
-    .map((c) => ({
-      ...c,
-      latitude: Number(c.latitude),
-      longitude: Number(c.longitude),
-      statusColor: statusColor(c.status),
-    }))
-    .filter((c) => Number.isFinite(c.latitude) && Number.isFinite(c.longitude));
+// Price when the court has one (most useful at a glance), else a short name.
+export function pinLabel(court: CourtLocation): string {
+  if (court.hourlyRate !== null && court.hourlyRate !== undefined && Number.isFinite(Number(court.hourlyRate))) {
+    return `₱${Math.round(Number(court.hourlyRate))}`;
+  }
+  const name = (court.name || "Court").trim();
+  return name.length > 16 ? `${name.slice(0, 15)}…` : name;
+}
 
-  // Escaping "<" prevents a court field containing "</script>" from breaking out of the
-  // inline <script> tag below when this JSON is embedded directly into the HTML document.
-  const courtsJson = JSON.stringify(mappableCourts).replace(/</g, "\\u003c");
+export function toMapPins(courts: CourtLocation[]): MapPin[] {
+  return courts
+    .map((c) => ({ id: String(c.id), lat: Number(c.latitude), lng: Number(c.longitude), status: c.status || "Available", label: pinLabel(c), name: c.name || "Court" }))
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !(p.lat === 0 && p.lng === 0));
+}
 
+export function insideBounds(court: CourtLocation, bounds: MapBounds | null): boolean {
+  if (!bounds) return true;
+  const lat = Number(court.latitude);
+  const lng = Number(court.longitude);
+  return lat <= bounds.north && lat >= bounds.south && lng <= bounds.east && lng >= bounds.west;
+}
+
+// CARTO's raster basemaps need a key since Aug 2026 (requests without one get
+// an "API KEY REQUIRED" watermark). It's a client-side key by design, read
+// from EXPO_PUBLIC_CARTO_BASEMAP_KEY. Without a key we fall back to Esri's
+// keyless Dark Gray canvas rather than show the watermark.
+export function tileLayers(cartoKey?: string | null) {
+  const key = typeof cartoKey === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(cartoKey.trim()) ? cartoKey.trim() : null;
+  if (key) {
+    return [{
+      url: `https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png?key=${key}`,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    }];
+  }
+  return [
+    { url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", attribution: "Tiles &copy; Esri" },
+    { url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}", attribution: "" },
+  ];
+}
+
+export function generateLeafletHtml(cartoKey?: string | null): string {
+  // Escaping "<" keeps the JSON from closing the inline <script> early.
+  const layers = JSON.stringify(tileLayers(cartoKey)).replace(/</g, "\\u003c");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -38,222 +78,190 @@ export function generateLeafletHtml(courts: CourtLocation[]): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Tagum City Courts Map</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
   <style>
     * { box-sizing: border-box; }
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      background-color: #06231D;
-      overflow: hidden;
-      -webkit-user-select: none;
-      user-select: none;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-    #map {
-      width: 100%;
-      height: 100%;
-    }
-    /* Dark / DinkTagum themed popups */
-    .leaflet-popup-content-wrapper {
-      background: #06231D !important;
-      color: #FFFDEE !important;
-      border-radius: 12px !important;
-      border: 1px solid rgba(226, 251, 206, 0.25) !important;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
-      padding: 4px !important;
-    }
-    .leaflet-popup-tip {
-      background: #06231D !important;
-    }
-    .leaflet-popup-content {
-      margin: 8px 12px !important;
-      line-height: 1.4 !important;
-    }
-    .court-popup-title {
-      font-size: 13px;
-      font-weight: 700;
-      color: #FFFDEE;
-      margin-bottom: 4px;
-    }
-    .court-popup-meta {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      margin-bottom: 8px;
-    }
-    .court-popup-badge {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 6px;
-      font-weight: 600;
-      font-size: 10px;
-      color: #FFFDEE;
-    }
-    .court-popup-rating {
-      color: #E3EF26;
-      font-weight: 600;
-      font-size: 11px;
-    }
-    .court-popup-actions {
-      display: flex;
-      gap: 6px;
-    }
-    .court-popup-btn {
-      flex: 1;
-      background-color: #078B68;
-      color: #FFFDEE;
-      text-align: center;
-      padding: 6px 0;
-      border-radius: 8px;
-      font-size: 11px;
-      font-weight: 700;
-      cursor: pointer;
-      border: none;
-      transition: background-color 0.15s ease;
-    }
-    .court-popup-btn:active {
-      background-color: #05664d;
-    }
-    .court-popup-dir-btn {
-      flex: 1;
-      background-color: rgba(226,251,206,0.10);
-      color: #E2FBCE;
-      text-align: center;
-      padding: 6px 0;
-      border-radius: 8px;
-      font-size: 11px;
-      font-weight: 700;
-      cursor: pointer;
-      border: 1px solid rgba(226,251,206,0.25);
-      text-decoration: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background-color 0.15s ease;
-    }
-    .court-popup-dir-btn:active {
-      background-color: rgba(226,251,206,0.18);
-    }
-    /* Custom Pin Marker */
-    .custom-court-marker {
-      background: none;
-      border: none;
-    }
-    .court-pin {
-      width: 26px;
-      height: 26px;
-      border-radius: 50% 50% 50% 0;
-      position: absolute;
-      transform: rotate(-45deg);
-      left: 50%;
-      top: 50%;
-      margin: -20px 0 0 -13px;
-      border: 2px solid #FFFDEE;
-      box-shadow: 0 3px 8px rgba(0,0,0,0.45);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .court-pin-inner {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background-color: #FFFDEE;
-    }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0B1F1A; overflow: hidden;
+      -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    #map { width: 100%; height: 100%; background: #0B1F1A; }
+    .leaflet-control-attribution { background: rgba(6,35,29,0.7) !important; color: rgba(255,253,238,0.55) !important; font-size: 9px !important; }
+    .leaflet-control-attribution a { color: rgba(227,239,38,0.8) !important; }
+    .leaflet-div-icon { background: transparent; border: none; }
+
+    /* Price / name pill with a pointer underneath. */
+    .pin { position: relative; display: inline-flex; align-items: center; gap: 4px; transform: translate(-50%, -100%);
+      padding: 4px 9px; border-radius: 999px; border: 2px solid #06231D; white-space: nowrap;
+      font-size: 12px; font-weight: 800; color: #06231D; box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+      transition: transform 120ms ease; }
+    .pin::after { content: ""; position: absolute; left: 50%; bottom: -7px; margin-left: -5px;
+      border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid #06231D; }
+    .pin .dot { width: 6px; height: 6px; border-radius: 3px; background: #06231D; opacity: 0.55; }
+    .pin.closed { color: #FFFDEE; opacity: 0.85; }
+    .pin.selected { transform: translate(-50%, -100%) scale(1.18); border-color: #E3EF26; z-index: 1000; }
+
+    .cluster { width: 40px; height: 40px; border-radius: 20px; background: #E3EF26; color: #06231D;
+      display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px;
+      border: 3px solid rgba(6,35,29,0.85); box-shadow: 0 0 0 4px rgba(227,239,38,0.25); }
+
+    .me { width: 18px; height: 18px; border-radius: 9px; background: #4DA3FF; border: 3px solid #fff;
+      box-shadow: 0 0 0 6px rgba(77,163,255,0.25); }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <script>
+    // Surface page errors to the app (the iframe/WebView console is hidden).
+    window.addEventListener('error', function(e) {
+      var payload = JSON.stringify({ type: 'map_error', message: String(e.message || e.type) + (e.filename ? ' @' + e.filename + ':' + e.lineno : '') });
+      if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(payload);
+      else if (window.parent !== window) window.parent.postMessage(payload, '*');
+    }, true);
     (function() {
-      var TAGUM_LAT = ${TAGUM_LATITUDE};
-      var TAGUM_LNG = ${TAGUM_LONGITUDE};
-      var TAGUM_ZOOM = ${TAGUM_ZOOM};
-      var courts = ${courtsJson};
+      var COLORS = ${JSON.stringify(PIN_COLORS)};
+      var map = L.map('map', { zoomControl: false, attributionControl: true })
+        .setView([${TAGUM_LATITUDE}, ${TAGUM_LONGITUDE}], ${TAGUM_ZOOM});
 
-      // Initialize map centered at Tagum City, Davao del Norte
-      var map = L.map('map', {
-        zoomControl: true,
-        attributionControl: true
-      }).setView([TAGUM_LAT, TAGUM_LNG], TAGUM_ZOOM);
+      // Muted dark basemap (see tileLayers() for the provider choice).
+      var tiles = ${layers}.map(function(layer) {
+        return L.tileLayer(layer.url, { maxZoom: 19, subdomains: 'abcd', attribution: layer.attribution }).addTo(map);
+      });
 
-      // Esri "World Street Map" basemap: free, no API key required, and colorful
-      // (roads, parks, water) instead of the flat dark-gray canvas previously used
-      // here. Both tile.openstreetmap.org and Wikimedia's OSM mirror were tried
-      // first but return 403 Forbidden for this app's requests; this Esri REST
-      // tile service (same host family as the dark-gray canvas it replaces) was
-      // verified working (confirmed HTTP 200) and does not require a key, unlike
-      // Esri's newer vector basemap/location services.
-      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
-        maxZoom: 19,
-        attribution: 'Tiles &copy; <a href="https://www.esri.com">Esri</a> &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom'
-      }).addTo(map);
-
-      // Post message back to React Native or Web parent
-      function notifyCourtSelected(courtId) {
-        var payload = JSON.stringify({ type: 'court_selected', courtId: courtId });
-        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
-          window.ReactNativeWebView.postMessage(payload);
-        }
-        if (window.parent && window.parent.postMessage) {
-          window.parent.postMessage(payload, '*');
-        }
+      function send(message) {
+        var payload = JSON.stringify(message);
+        if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) window.ReactNativeWebView.postMessage(payload);
+        else if (window.parent && window.parent !== window) window.parent.postMessage(payload, '*');
       }
 
-      window.notifyCourtSelected = notifyCourtSelected;
-
-      // Escape any court field before it is concatenated into an HTML string, since
-      // court data comes from the database and must never be trusted as raw markup.
-      function escapeHtml(value) {
-        return String(value === null || value === undefined ? '' : value).replace(/[&<>"']/g, function(ch) {
+      // Court names come from the database: escape before building HTML.
+      function esc(value) {
+        return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
           return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
         });
       }
 
-      // Add markers for Tagum courts
-      courts.forEach(function(court) {
-        var markerHtml = '<div class="court-pin" style="background-color: ' + court.statusColor + ';">' +
-                         '  <div class="court-pin-inner"></div>' +
-                         '</div>';
+      var cluster = L.markerClusterGroup({
+        maxClusterRadius: 72, showCoverageOnHover: false, spiderfyOnMaxZoom: true, disableClusteringAtZoom: 16,
+        iconCreateFunction: function(c) {
+          return L.divIcon({ html: '<div class="cluster">' + c.getChildCount() + '</div>', className: '', iconSize: [40, 40] });
+        }
+      }).addTo(map);
 
-        var customIcon = L.divIcon({
-          className: 'custom-court-marker',
-          html: markerHtml,
-          iconSize: [26, 36],
-          iconAnchor: [13, 36],
-          popupAnchor: [0, -32]
+      var markers = {};
+      var pins = [];
+      var selectedId = null;
+      var me = null;
+      // Programmatic moves (fit, centering) must not show "Search this area".
+      var quiet = 0;
+
+      function pinIcon(pin) {
+        var cls = 'pin' + (pin.status === 'Closed' ? ' closed' : '') + (pin.id === selectedId ? ' selected' : '');
+        var html = '<div class="' + cls + '" style="background:' + (COLORS[pin.status] || COLORS.Available) + '"><span class="dot"></span>' + esc(pin.label) + '</div>';
+        return L.divIcon({ html: html, className: '', iconSize: [0, 0] });
+      }
+
+      function quietly(fn) { quiet += 1; fn(); setTimeout(function() { quiet = Math.max(0, quiet - 1); }, 600); }
+
+      function fitAll() {
+        // Fitting a frame smaller than its padding gives Leaflet a NaN zoom,
+        // which blanks the map for good. Wait for a real size (onResize retries).
+        var size = map.getSize();
+        if (size.x < 160 || size.y < 160) return;
+        var points = pins.map(function(p) { return [p.lat, p.lng]; });
+        if (me) points.push([me.lat, me.lng]);
+        // Pins are pills centered on their point, so the right padding covers
+        // half a pill plus the map buttons; the bottom clears the legend.
+        quietly(function() {
+          if (points.length > 1) map.fitBounds(points, { paddingTopLeft: [56, 64], paddingBottomRight: [100, 48], maxZoom: 15 });
+          else if (points.length === 1) map.setView(points[0], 15);
         });
+      }
 
-        var osmUrl = 'https://www.openstreetmap.org/directions?engine=osrm_car&route=;' + court.latitude + ',' + court.longitude + '#map=16/' + court.latitude + '/' + court.longitude;
-
-        var popupContent = '<div class="court-popup-title">' + escapeHtml(court.name || 'Pickleball Court') + '</div>' +
-          '<div class="court-popup-meta">' +
-          '  <span class="court-popup-badge" style="background-color: ' + court.statusColor + ';">' + escapeHtml(court.status || 'Available') + '</span>' +
-          '  <span class="court-popup-rating">★ ' + escapeHtml(court.rating || '—') + '</span>' +
-          '</div>' +
-          '<div class="court-popup-actions">' +
-          '  <button class="court-popup-btn" data-court-id="' + escapeHtml(String(court.id)) + '">View Details</button>' +
-          '  <a class="court-popup-dir-btn" href="' + osmUrl + '" target="_blank" rel="noopener noreferrer">Directions</a>' +
-          '</div>';
-
-        var marker = L.marker([court.latitude, court.longitude], { icon: customIcon }).addTo(map);
-        marker.bindPopup(popupContent);
-
-        // The button's click is wired up after the popup opens (rather than an inline
-        // onclick attribute) so the court id never has to be embedded as HTML markup.
-        marker.on('popupopen', function(e) {
-          var btn = e.popup.getElement() && e.popup.getElement().querySelector('.court-popup-btn');
-          if (btn) btn.addEventListener('click', function() { notifyCourtSelected(court.id); });
+      function setCourts(next, fit) {
+        pins = next;
+        cluster.clearLayers();
+        markers = {};
+        pins.forEach(function(pin) {
+          var marker = L.marker([pin.lat, pin.lng], { icon: pinIcon(pin), title: pin.name, alt: pin.name + ', ' + pin.status, keyboard: true });
+          marker.on('click', function(e) { L.DomEvent.stopPropagation(e); send({ type: 'court_selected', courtId: pin.id }); });
+          markers[pin.id] = marker;
+          cluster.addLayer(marker);
         });
+        if (fit) fitAll();
+      }
 
-        marker.on('click', function() {
-          notifyCourtSelected(court.id);
+      function select(id) {
+        var previous = selectedId;
+        selectedId = id;
+        [previous, id].forEach(function(key) {
+          var pin = pins.find(function(p) { return p.id === key; });
+          if (pin && markers[key]) markers[key].setIcon(pinIcon(pin));
         });
+        if (id && markers[id]) {
+          // Reveal it if it's hidden in a cluster, then pan it into view.
+          quietly(function() { cluster.zoomToShowLayer(markers[id], function() { map.panTo(markers[id].getLatLng()); }); });
+        }
+      }
+
+      function setUser(lat, lng, center) {
+        me = { lat: lat, lng: lng };
+        if (!window.__meMarker) window.__meMarker = L.marker([lat, lng], { icon: L.divIcon({ html: '<div class="me"></div>', className: '', iconSize: [18, 18], iconAnchor: [9, 9] }), interactive: false }).addTo(map);
+        else window.__meMarker.setLatLng([lat, lng]);
+        if (center) quietly(function() { map.setView([lat, lng], Math.max(map.getZoom(), 14)); });
+      }
+
+      function receive(message) {
+        if (!message || typeof message !== 'object') return;
+        if (message.type === 'set_courts') setCourts(message.pins || [], message.fit);
+        else if (message.type === 'select') select(message.id);
+        else if (message.type === 'set_user') setUser(message.lat, message.lng, message.center);
+        else if (message.type === 'fit') fitAll();
+      }
+
+      // Native injects calls to this; web posts messages from the parent page.
+      window.__dtReceive = receive;
+      window.addEventListener('message', function(event) {
+        if (event.source !== window.parent) return;
+        try { receive(typeof event.data === 'string' ? JSON.parse(event.data) : event.data); } catch (e) {}
       });
+
+      // The WebView/iframe often starts at 0 or a partial size while the
+      // React Native layout settles; re-measure on every resize, and re-fit
+      // the pins as long as the player hasn't moved the map themselves.
+      var userMoved = false;
+      // Only real gestures count as "the player moved the map": Leaflet also
+      // fires move events for fits, resizes and cluster zooms.
+      var gesture = false;
+      function markGesture() { gesture = true; userMoved = true; }
+      map.on('dragstart', markGesture);
+      var container = map.getContainer();
+      container.addEventListener('wheel', markGesture, { passive: true });
+      container.addEventListener('dblclick', markGesture);
+      container.addEventListener('touchstart', function(e) { if (e.touches && e.touches.length > 1) markGesture(); }, { passive: true });
+      function onResize() {
+        map.invalidateSize();
+        if (!userMoved && pins.length) fitAll();
+      }
+      if (window.ResizeObserver) new ResizeObserver(onResize).observe(document.getElementById('map'));
+      else window.addEventListener('resize', onResize);
+
+      map.on('click', function() { send({ type: 'map_tap' }); });
+      map.on('moveend', function() {
+        if (quiet || !gesture) return;
+        gesture = false;
+        var b = map.getBounds();
+        send({ type: 'map_moved', bounds: { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() } });
+      });
+
+      send({ type: 'ready' });
+      // The app keeps its loading skeleton up until the basemap has drawn
+      // (or 8s pass, so a slow tile server can't hide the pins forever).
+      var tilesAnnounced = false;
+      function announceTiles() { if (!tilesAnnounced) { tilesAnnounced = true; send({ type: 'tiles_ready' }); } }
+      tiles[0].once('load', announceTiles);
+      setTimeout(announceTiles, 8000);
     })();
   </script>
 </body>

@@ -1,4 +1,4 @@
-import { buildDayOptions, canCancelReservation, courtsNearLocation, nextUpcomingReservation, parseSlotLabel, slotHasStarted, slotOverlapsBusy } from "./DashboardContext";
+import { buildDayOptions, canCancelReservation, courtsNearLocation, isNetworkError, nextUpcomingReservation, parseSlotLabel, profileFieldErrors, slotHasStarted, slotOverlapsBusy } from "./DashboardContext";
 
 describe("courtsNearLocation", () => {
   const location = { latitude: 7.4478, longitude: 125.8083 };
@@ -85,5 +85,28 @@ describe("slotHasStarted", () => {
   it("never blocks slots on a later day", () => {
     const now = new Date("2026-01-14T23:00:00").getTime();
     expect(slotHasStarted(day, "6:00 AM", now)).toBe(false);
+  });
+});
+
+describe("profileFieldErrors", () => {
+  const valid = { display_name: "Ana", location: "Tagum", skill_level: "3.5", avatar_url: "", preferred_game_type: "Doubles" };
+
+  it("accepts a valid profile", () => {
+    expect(profileFieldErrors(valid)).toEqual({});
+  });
+
+  it("reports each bad field", () => {
+    const errors = profileFieldErrors({ ...valid, display_name: " ", skill_level: "7", avatar_url: "ftp://x" });
+    expect(Object.keys(errors).sort()).toEqual(["avatar_url", "display_name", "skill_level"]);
+    expect(profileFieldErrors({ ...valid, skill_level: "" }).skill_level).toMatch(/Enter/);
+  });
+});
+
+describe("isNetworkError", () => {
+  it("tells connection failures from query errors", () => {
+    expect(isNetworkError({ message: "TypeError: Failed to fetch" })).toBe(true);
+    expect(isNetworkError({ name: "AuthRetryableFetchError", message: "" })).toBe(true);
+    expect(isNetworkError({ code: "42501", message: "permission denied for table courts" })).toBe(false);
+    expect(isNetworkError(null)).toBe(false);
   });
 });

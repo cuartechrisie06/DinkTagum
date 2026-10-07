@@ -1,5 +1,5 @@
 import React from "react";
-import { Platform, StatusBar, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { supabase } from "../../lib/supabase";
@@ -10,24 +10,14 @@ import { initialsFor } from "../utils/format";
 import { AdminTab } from "./AdminTab";
 import { ChatList, ChatThread } from "./ChatScreens";
 import { CourtDetail } from "./CourtDetail";
-import { NotificationCenter } from "./NotificationCenter";
-import { C, Icon } from "./shared";
+import { KIND_ICONS, NotificationCenter, notificationRoute } from "./NotificationCenter";
+import { C, Icon, ScreenFrame } from "./shared";
+import { ToastHost } from "../components/Feedback";
 
 function InAppNotificationBanner({ banner, onDismiss, onPress }) {
   if (!banner) return null;
 
-  const iconName =
-    banner.kind === "message"
-      ? "chatbubble-ellipses"
-      : banner.kind === "reservation"
-      ? "calendar"
-      : banner.kind === "connection"
-      ? "person-add"
-      : banner.kind === "game_invitation"
-      ? "tennisball"
-      : banner.kind === "community"
-      ? "people"
-      : "notifications";
+  const iconName = KIND_ICONS[banner.kind] || "notifications";
 
   return (
     <SafeAreaView edges={["top"]} style={bannerStyles.wrapper} pointerEvents="box-none">
@@ -76,6 +66,7 @@ export function AppOverlays() {
     setAdminView,
     activeBanner,
     dismissBanner,
+    goBack,
   } = useOverlayNav();
 
   if (!session) return null;
@@ -144,14 +135,10 @@ export function AppOverlays() {
 
     if (banner.kind === "message") {
       openConversation(banner.related_id);
-    } else if (banner.kind === "reservation") {
-      handleNavigate("/history");
-    } else if (banner.kind === "connection" || banner.kind === "game_invitation") {
-      handleNavigate("/directory");
-    } else if (banner.kind === "community") {
-      handleNavigate("/feed");
-    } else {
+    } else if (banner.kind === "system") {
       setNotificationView(true);
+    } else {
+      handleNavigate(notificationRoute(banner.kind));
     }
   };
 
@@ -183,23 +170,32 @@ export function AppOverlays() {
     );
   }
 
+
+  const banner = <InAppNotificationBanner banner={activeBanner} onDismiss={dismissBanner} onPress={handleBannerPress} />;
+
   return (
-    // On native, react-native-screens' tab container can draw above a plain
-    // absolutely-positioned sibling, hiding the overlay behind the current tab.
-    // An explicit zIndex (iOS) and elevation (Android) keeps it on top.
-    <View style={[StyleSheet.absoluteFillObject, { zIndex: 1000, elevation: 1000 }]} pointerEvents="box-none">
-      {content ? (
-        <View style={{ flex: 1, backgroundColor: C.ink }}>
-          <StatusBar barStyle="light-content" />
-          {content}
-        </View>
+    <>
+      {/* Overlays render in a Modal, not an absolutely-positioned View over
+          <Tabs>. On Android the tab screens live in native react-native-screens
+          containers, which drew over that View even with zIndex/elevation, so
+          taps updated state but the screen opened invisibly underneath. A Modal
+          is its own native window above the activity, on every platform. */}
+      <Modal
+        visible={Boolean(content)}
+        animationType="slide"
+        onRequestClose={goBack}
+        statusBarTranslucent
+        navigationBarTranslucent
+      >
+        <ScreenFrame>{content}</ScreenFrame>
+        {content ? banner : null}
+        {/* Toasts raised while an overlay is open must render in its window. */}
+        {content ? <ToastHost /> : null}
+      </Modal>
+      {!content ? (
+        <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">{banner}</View>
       ) : null}
-      <InAppNotificationBanner
-        banner={activeBanner}
-        onDismiss={dismissBanner}
-        onPress={handleBannerPress}
-      />
-    </View>
+    </>
   );
 }
 

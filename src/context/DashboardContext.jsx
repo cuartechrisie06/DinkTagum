@@ -1,10 +1,17 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import * as Location from "expo-location";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../utils/confirm";
 import { useAuth } from "./AuthContext";
+import { enrichCourt } from "../utils/courts";
+import { readCache, savedAgoLabel, writeCache } from "../utils/cache";
+import { parseSlotLabel, slotHasStarted, slotOverlapsBusy } from "../utils/slots";
+
+// Re-exported so existing imports keep working.
+export { parseSlotLabel, slotHasStarted, slotOverlapsBusy };
 
 const DashboardContext = createContext(null);
+const PROFILE_COLUMNS = "display_name, location, skill_level, avatar_url, preferred_game_type, is_directory_visible, created_at";
 
 export function courtForDisplay(court) {
   const distance = court.distance_km ?? court.distance ?? null;
@@ -24,6 +31,9 @@ export function courtForDisplay(court) {
     contactPhone: court.contact_phone || "",
     hourlyRate: court.hourly_rate === null || court.hourly_rate === undefined ? null : Number(court.hourly_rate),
     scheduleNote: court.schedule_note || "",
+    surface: court.surface || null,
+    opensAt: court.opens_at || null,
+    closesAt: court.closes_at || null,
     photoUrls: Array.isArray(court.photo_urls) ? court.photo_urls.filter((url) => typeof url === "string" && /^https?:\/\//i.test(url)) : [],
     latitude: Number(court.latitude),
     longitude: Number(court.longitude),
@@ -45,14 +55,6 @@ export function courtsNearLocation(courts, location) {
     .filter((court) => Number.isFinite(court.latitude) && Number.isFinite(court.longitude))
     .map((court) => ({ ...court, dist: `${distanceInKm(location, court).toFixed(1)} km` }))
     .sort((a, b) => Number.parseFloat(a.dist) - Number.parseFloat(b.dist));
-}
-
-export function parseSlotLabel(timeLabel) {
-  const [time, meridiem] = timeLabel.split(" ");
-  let [hour, minute] = time.split(":").map(Number);
-  if (meridiem === "PM" && hour !== 12) hour += 12;
-  if (meridiem === "AM" && hour === 12) hour = 0;
-  return { hour, minute };
 }
 
 export function buildDayOptions(count = 3) {
@@ -83,34 +85,39 @@ export function canCancelReservation(reservation, now = Date.now()) {
   return ["pending", "confirmed"].includes(reservation.status) && new Date(reservation.start_time).getTime() > now;
 }
 
-// True once a slot on the given day has started, so it can no longer be booked.
-export function slotHasStarted(dayDate, timeLabel, now = Date.now()) {
-  const { hour, minute } = parseSlotLabel(timeLabel);
-  const start = new Date(dayDate);
-  start.setHours(hour, minute, 0, 0);
-  return start.getTime() <= now;
-}
-
-export function slotOverlapsBusy(dayDate, timeLabel, busyRanges) {
-  const { hour, minute } = parseSlotLabel(timeLabel);
-  const start = new Date(dayDate);
-  start.setHours(hour, minute, 0, 0);
-  const end = new Date(start.getTime() + 60 * 60 * 1000);
-  return busyRanges.some((range) => {
-    const busyStart = new Date(range.start_time).getTime();
-    const busyEnd = new Date(range.end_time).getTime();
-    return start.getTime() < busyEnd && end.getTime() > busyStart;
-  });
-}
-
 // Mounted only while signed in (see app/_layout.jsx), keyed by user id, so a sign-out or
 // switch to a different account remounts this provider instead of needing manual resets.
+// Profile editor rules, keyed by field so the form can show each message under
+// its input. Empty object when valid.
+export function profileFieldErrors({ display_name, location, skill_level, avatar_url, preferred_game_type }) {
+  const errors = {};
+  const name = String(display_name ?? "").trim();
+  const skillText = String(skill_level ?? "").trim();
+  const skill = Number(skillText);
+  if (!name) errors.display_name = "Your display name cannot be blank.";
+  else if (name.length > 60) errors.display_name = "Keep your name under 60 characters.";
+  if (String(location ?? "").trim().length > 120) errors.location = "Keep the location under 120 characters.";
+  if (!skillText) errors.skill_level = "Enter your skill level, e.g. 3.5.";
+  else if (!Number.isFinite(skill) || skill < 1 || skill > 5) errors.skill_level = "Use a number from 1.0 to 5.0.";
+  const avatar = String(avatar_url ?? "").trim();
+  if (avatar && !/^https?:\/\//i.test(avatar)) errors.avatar_url = "Use a full http or https image URL.";
+  if (!["Singles", "Doubles", "Either"].includes(preferred_game_type)) errors.preferred_game_type = "Choose Singles, Doubles, or Either.";
+  return errors;
+}
+
+// Network failures (no signal, server unreachable) as opposed to query errors.
+export function isNetworkError(error) {
+  if (!error) return false;
+  return error.name === "AuthRetryableFetchError" || error.status === 0 || /network|fetch|timed? ?out|offline/i.test(String(error.message || ""));
+}
+
 export function DashboardProvider({ children }) {
   const { session } = useAuth();
   const userId = session.user.id;
 
   const [profile, setProfile] = useState(null);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [availabilitySupported, setAvailabilitySupported] = useState(true);
   const [reserving, setReserving] = useState(false);
   const [courts, setCourts] = useState([]);
   const [rawCourts, setRawCourts] = useState([]);
@@ -121,41 +128,129 @@ export function DashboardProvider({ children }) {
   const [userLocation, setUserLocation] = useState(null);
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationMessage, setLocationMessage] = useState("");
+  // Booked ranges per court (today + tomorrow) for "Next slot", and the
+  // player's favorite courts. Both are null/unsupported until the court
+  // details migration is applied; the UI then just omits them.
+  const [busyByCourt, setBusyByCourt] = useState(null);
+  const [favoriteIds, setFavoriteIds] = useState(() => new Set());
+  const [favoritesSupported, setFavoritesSupported] = useState(false);
+  // Re-evaluates "Open now" / "Opens 8 AM" as the clock moves.
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60 * 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const loadBusyByCourt = useCallback(async () => {
+    if (!supabase) return;
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 2);
+    const { data, error } = await supabase.rpc("all_courts_busy_slots", { p_range_start: start.toISOString(), p_range_end: end.toISOString() });
+    if (error) { setBusyByCourt(null); return; }
+    const grouped = {};
+    for (const row of data || []) (grouped[row.court_id] ||= []).push(row);
+    setBusyByCourt(grouped);
+  }, []);
+
+  const loadFavorites = useCallback(async () => {
+    if (!supabase) return;
+    const { data, error } = await supabase.from("favorite_courts").select("court_id").eq("user_id", userId);
+    setFavoritesSupported(!error);
+    if (!error) setFavoriteIds(new Set((data || []).map((row) => row.court_id)));
+  }, [userId]);
+
+  // Last dashboard seen on this device, so the app opens with data and still
+  // shows courts and bookings when offline. Network data always wins.
+  const cacheRef = useRef({ savedAt: null, fresh: false });
+  useEffect(() => {
+    let active = true;
+    readCache("dashboard", userId).then((cached) => {
+      if (!active || !cached || cacheRef.current.fresh) return;
+      const { profile: cachedProfile, courts: cachedCourts, reservations: cachedReservations } = cached.data || {};
+      if (cachedProfile) setProfile(cachedProfile);
+      if (Array.isArray(cachedCourts)) { setRawCourts(cachedCourts); setCourts(cachedCourts.map(courtForDisplay)); }
+      if (Array.isArray(cachedReservations)) setReservations(cachedReservations);
+      cacheRef.current.savedAt = cached.savedAt;
+    });
+    return () => { active = false; };
+  }, [userId]);
 
   useEffect(() => {
     if (!supabase) return undefined;
     let active = true;
+    const offlineMessage = () => {
+      const { savedAt } = cacheRef.current;
+      return savedAt
+        ? `You're offline. Showing data saved ${savedAgoLabel(savedAt)} — pull down to retry.`
+        : "We could not reach the dashboard data. Check your connection and try again.";
+    };
     const loadDashboard = async () => {
       setDashboardLoading(true);
       setDashboardError("");
       const { data: authData, error: authError } = await supabase.auth.getUser();
       if (!active) return;
       if (authError || !authData.user) {
-        setDashboardError("Your session has expired. Please sign in again.");
+        setDashboardError(isNetworkError(authError) ? offlineMessage() : "Your session has expired. Please sign in again.");
         setDashboardLoading(false);
         return;
       }
-      const [profileResult, courtsResult, reservationResult] = await Promise.all([
-        supabase.from("profiles").select("display_name, location, skill_level, avatar_url, preferred_game_type, is_directory_visible, created_at").eq("id", authData.user.id).maybeSingle(),
+      const profileQuery = (columns) => supabase.from("profiles").select(columns).eq("id", authData.user.id).maybeSingle();
+      const [profileAttempt, courtsResult, reservationResult] = await Promise.all([
+        profileQuery(`${PROFILE_COLUMNS}, availability`),
         supabase.from("courts").select("*").order("name", { ascending: true }),
         supabase.from("reservations").select("*").eq("user_id", authData.user.id).order("start_time", { ascending: false }).limit(100),
       ]);
       if (!active) return;
+      // profiles.availability arrives with a later migration.
+      let profileResult = profileAttempt;
+      if (profileAttempt.error && (profileAttempt.error.code === "42703" || /availability/.test(profileAttempt.error.message))) {
+        setAvailabilitySupported(false);
+        profileResult = await profileQuery(PROFILE_COLUMNS);
+        if (!active) return;
+      }
       if (profileResult.data) setProfile(profileResult.data);
-      setRawCourts(courtsResult.data || []);
-      setCourts((courtsResult.data || []).map(courtForDisplay));
-      setReservations(reservationResult.data || []);
+      // A failed query keeps whatever is on screen (possibly cached) instead of
+      // blanking the list.
+      if (!courtsResult.error) { setRawCourts(courtsResult.data || []); setCourts((courtsResult.data || []).map(courtForDisplay)); }
+      if (!reservationResult.error) setReservations(reservationResult.data || []);
+      if (!profileResult.error && !courtsResult.error && !reservationResult.error) {
+        cacheRef.current = { savedAt: Date.now(), fresh: true };
+        writeCache("dashboard", authData.user.id, { profile: profileResult.data, courts: courtsResult.data || [], reservations: reservationResult.data || [] });
+      }
+      setNow(Date.now());
+      await Promise.all([loadBusyByCourt(), loadFavorites()]);
+      if (!active) return;
       const errors = [profileResult.error, courtsResult.error, reservationResult.error].filter(Boolean);
-      if (errors.length) setDashboardError(`Some dashboard data could not be loaded: ${errors.map((queryError) => queryError.message).join(" · ")}`);
+      if (errors.length && errors.every(isNetworkError)) setDashboardError(offlineMessage());
+      else if (errors.length) setDashboardError(`Some dashboard data could not be loaded: ${errors.map((queryError) => queryError.message).join(" · ")}`);
       setDashboardLoading(false);
     };
     loadDashboard().catch(() => {
       if (!active) return;
-      setDashboardError("We could not reach the dashboard data. Check your connection and try again.");
+      setDashboardError(offlineMessage());
       setDashboardLoading(false);
     });
     return () => { active = false; };
-  }, [userId, reloadKey]);
+  }, [userId, reloadKey, loadBusyByCourt, loadFavorites]);
+
+  // Optimistic: the heart flips immediately and rolls back if the write fails.
+  const toggleFavorite = useCallback(async (courtId) => {
+    if (!supabase || !favoritesSupported) return;
+    const wasFavorite = favoriteIds.has(courtId);
+    const flip = (on) => setFavoriteIds((current) => {
+      const next = new Set(current);
+      if (on) next.add(courtId); else next.delete(courtId);
+      return next;
+    });
+    flip(!wasFavorite);
+    const { error } = wasFavorite
+      ? await supabase.from("favorite_courts").delete().eq("user_id", userId).eq("court_id", courtId)
+      : await supabase.from("favorite_courts").insert({ user_id: userId, court_id: courtId });
+    if (error) { flip(wasFavorite); notify("Could not update favorites", error.message); }
+  }, [favoriteIds, favoritesSupported, userId]);
 
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
@@ -175,17 +270,17 @@ export function DashboardProvider({ children }) {
     const avatar_url = changes.avatar_url.trim();
     const preferred_game_type = changes.preferred_game_type;
     const is_directory_visible = Boolean(changes.is_directory_visible);
-    if (!display_name) { notify("Add your name", "Your display name cannot be blank."); return false; }
-    if (!Number.isFinite(skill_level) || skill_level < 1 || skill_level > 5) { notify("Check skill level", "Use a number from 1.0 to 5.0."); return false; }
-    if (avatar_url && !/^https?:\/\//i.test(avatar_url)) { notify("Check avatar URL", "Use a full http or https image URL."); return false; }
-    if (!["Singles", "Doubles", "Either"].includes(preferred_game_type)) { notify("Check game type", "Choose Singles, Doubles, or Either."); return false; }
+    const firstError = Object.values(profileFieldErrors(changes))[0];
+    if (firstError) { notify("Check your profile", firstError); return false; }
     setSavingProfile(true);
-    const { data, error } = await supabase.from("profiles").upsert({ id: userId, display_name, location: location || null, skill_level, avatar_url: avatar_url || null, preferred_game_type, is_directory_visible }, { onConflict: "id" }).select().single();
+    const row = { id: userId, display_name, location: location || null, skill_level, avatar_url: avatar_url || null, preferred_game_type, is_directory_visible };
+    if (availabilitySupported && Array.isArray(changes.availability)) row.availability = changes.availability;
+    const { data, error } = await supabase.from("profiles").upsert(row, { onConflict: "id" }).select().single();
     setSavingProfile(false);
     if (error) { notify("Could not save profile", error.message); return false; }
     setProfile(data);
     return true;
-  }, [userId]);
+  }, [userId, availabilitySupported]);
 
   const loadBusySlots = useCallback(async (courtId, dayKey) => {
     if (!supabase || !courtId || !dayKey) return [];
@@ -229,14 +324,15 @@ export function DashboardProvider({ children }) {
     return [];
   }, []);
 
-  const createReservation = useCallback(async (court, dayKey, timeLabel) => {
+  // `hours` consecutive hours from timeLabel make one reservation.
+  const createReservation = useCallback(async (court, dayKey, timeLabel, hours = 1) => {
     if (!supabase) return { ok: false, message: "Supabase is not configured." };
     if (court.status === "Closed") return { ok: false, message: "This court is closed and cannot be reserved." };
     if (court.status === "Full") return { ok: false, message: "This court is marked full and cannot take new reservations." };
     const { hour, minute } = parseSlotLabel(timeLabel);
     const start = new Date(`${dayKey}T00:00:00`);
     start.setHours(hour, minute, 0, 0);
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    const end = new Date(start.getTime() + Math.max(1, hours) * 60 * 60 * 1000);
     if (start.getTime() <= Date.now()) return { ok: false, message: "That time has already started today. Pick a later slot or another day." };
     setReserving(true);
     const { data, error } = await supabase.from("reservations").insert({
@@ -248,8 +344,9 @@ export function DashboardProvider({ children }) {
       return { ok: false, message: overlap ? "That time slot was just taken. Pick another time." : `Reservation not submitted: ${error.message}` };
     }
     setReservations((current) => [data, ...current]);
-    return { ok: true };
-  }, [userId]);
+    loadBusyByCourt();
+    return { ok: true, reservation: data };
+  }, [userId, loadBusyByCourt]);
 
   // Players cancel rather than delete upcoming bookings: the row stays in their
   // history and the slot is freed (the overlap constraint ignores cancelled rows).
@@ -287,12 +384,16 @@ export function DashboardProvider({ children }) {
     }
   }, []);
 
-  const visibleCourts = useMemo(() => courtsNearLocation(courts, userLocation), [courts, userLocation]);
+  const visibleCourts = useMemo(
+    () => courtsNearLocation(courts, userLocation).map((court) => enrichCourt(court, { busyByCourt, favoriteIds, now })),
+    [courts, userLocation, busyByCourt, favoriteIds, now],
+  );
 
   const value = {
     profile,
     savingProfile,
     saveProfile,
+    availabilitySupported,
     courts: visibleCourts,
     reservation,
     reservations: reservationsWithCourts,
@@ -307,7 +408,10 @@ export function DashboardProvider({ children }) {
     locationLoading,
     locationMessage,
     hasLocation: Boolean(userLocation),
+    userLocation,
     findNearbyCourts,
+    toggleFavorite,
+    favoritesSupported,
   };
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;

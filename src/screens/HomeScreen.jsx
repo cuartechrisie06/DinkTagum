@@ -1,31 +1,38 @@
-import React from "react";
-import { ActivityIndicator, ScrollView, Text, TouchableOpacity, View } from "react-native";
+import React, { useState } from "react";
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useAuth } from "../context/AuthContext";
 import { useDashboard } from "../context/DashboardContext";
 import { useCommunityFeed } from "../context/CommunityFeedContext";
+import { useGameRecords } from "../context/GameRecordsContext";
+import { useOpenPlay } from "../context/OpenPlayContext";
 import { useOverlayNav } from "../context/OverlayNavContext";
 import { reservationTime } from "../utils/format";
-import { C, CourtCard, EmptyCard, ErrorNote, HeaderBar, Icon, PostCardCompact, S, ScreenFrame, SectionTitle, profileName, styles } from "./shared";
+import { OpenPlaySection } from "./OpenPlay";
+import { C, CourtCard, CourtCardSkeleton, EmptyCard, ErrorNote, HeaderBar, Icon, PostCardCompact, PostCardSkeleton, R, S, ScreenFrame, SectionTitle, profileName, styles } from "./shared";
 
 function greeting() {
   const hour = new Date().getHours();
   return hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 }
 
-function HomeTab({ openCourt, openChat, openNotifications, goTab, profile, user, courts, reservation, loading, error, posts, postsLoading, postsError, unreadMessages, unreadNotifications }) {
+function HomeTab({ openCourt, openChat, openNotifications, goTab, profile, user, courts, reservation, loading, error, posts, postsLoading, postsError, unreadMessages, unreadNotifications, pendingMatches, onToggleFavorite, refreshing, onRefresh }) {
   const name = profileName(profile, user);
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={{ paddingBottom: 32 }}>
-      <HeaderBar eyebrow={`${greeting()},`} title={name.split(" ")[0]} subtitle={profile?.location || "Tagum City"} onChat={openChat} onNotifications={openNotifications} chatBadge={unreadMessages > 0} notificationBadge={unreadNotifications > 0} />
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={{ paddingBottom: 32 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.volt} colors={[C.volt]} progressBackgroundColor={C.surface} />}
+    >
+      <HeaderBar eyebrow={`${greeting()},`} title={name.split(" ")[0]} subtitle={profile?.location || "Tagum City"} onChat={openChat} onNotifications={openNotifications} chatBadge={unreadMessages} notificationBadge={unreadNotifications} />
 
       <TouchableOpacity activeOpacity={0.9} onPress={() => (reservation?.court ? openCourt(reservation.court) : goTab("courts"))} accessibilityRole="button" accessibilityLabel={reservation ? "Open your next reservation" : "Find a court to reserve"}>
         <LinearGradient colors={[C.brand, "#0A4F41"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.reservationCard}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <View style={{ flex: 1, paddingRight: S.md }}>
               <Text style={styles.reservationLabel}>NEXT RESERVATION</Text>
-              <Text style={styles.reservationName} numberOfLines={1}>{loading ? "Loading…" : reservation?.court?.name || "No upcoming games"}</Text>
+              <Text style={styles.reservationName} numberOfLines={2}>{loading ? "Loading…" : reservation?.court?.name || "No upcoming games"}</Text>
               <Text style={styles.reservationTime}>{loading ? " " : reservation ? reservationTime(reservation) : "Book a court and it will show up here."}</Text>
             </View>
             <View style={styles.reservationIcon}>
@@ -35,11 +42,22 @@ function HomeTab({ openCourt, openChat, openNotifications, goTab, profile, user,
         </LinearGradient>
       </TouchableOpacity>
 
+      {pendingMatches > 0 ? (
+        <TouchableOpacity onPress={() => goTab("history")} activeOpacity={0.85} style={homeStyles.nudge} accessibilityRole="button" accessibilityLabel={`${pendingMatches} match score${pendingMatches === 1 ? "" : "s"} waiting for your confirmation`}>
+          <View style={homeStyles.nudgeIcon}><Icon name="shield-checkmark-outline" size={18} color={C.ink} /></View>
+          <View style={{ flex: 1, marginLeft: S.md }}>
+            <Text style={homeStyles.nudgeTitle}>{pendingMatches === 1 ? "A match score needs your OK" : `${pendingMatches} match scores need your OK`}</Text>
+            <Text style={homeStyles.nudgeBody}>Confirm to add it to your record</Text>
+          </View>
+          <Icon name="chevron-forward" size={18} color={C.butter} />
+        </TouchableOpacity>
+      ) : null}
+
       <View style={styles.quickActionsRow}>
         {[
           { icon: "location", label: "Find court", tab: "courts" },
           { icon: "people", label: "Find players", tab: "players" },
-          { icon: "chatbubbles", label: "Community", tab: "feed" },
+          { icon: "create", label: "Log match", tab: "history" },
         ].map((a) => (
           <TouchableOpacity key={a.label} onPress={() => goTab(a.tab)} style={styles.quickAction} activeOpacity={0.8} accessibilityRole="button" accessibilityLabel={a.label}>
             <View style={styles.quickActionIcon}><Icon name={a.icon} size={20} color={C.volt} /></View>
@@ -48,12 +66,18 @@ function HomeTab({ openCourt, openChat, openNotifications, goTab, profile, user,
         ))}
       </View>
 
+      <OpenPlaySection courts={courts} openCourt={openCourt} onFindCourt={() => goTab("courts")} />
+
       <View style={{ paddingHorizontal: S.xl, marginTop: S.xxl }}>
         <SectionTitle action="See all" onAction={() => goTab("courts")}>Courts nearby</SectionTitle>
       </View>
-      {loading ? <ActivityIndicator style={{ marginTop: 22 }} color={C.volt} /> : courts.length ? (
+      {loading ? (
+        <ScrollView horizontal scrollEnabled={false} showsHorizontalScrollIndicator={false} style={{ marginTop: S.md }} contentContainerStyle={{ paddingLeft: S.xl }}>
+          <CourtCardSkeleton compact /><CourtCardSkeleton compact />
+        </ScrollView>
+      ) : courts.length ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: S.md }} contentContainerStyle={{ paddingLeft: S.xl, paddingRight: S.sm }}>
-          {courts.slice(0, 5).map((c) => <CourtCard key={c.id} c={c} compact onPress={() => openCourt(c)} />)}
+          {courts.slice(0, 5).map((c) => <CourtCard key={c.id} c={c} compact onPress={() => openCourt(c)} onToggleFavorite={onToggleFavorite} />)}
           {courts.length > 5 ? (
             <TouchableOpacity
               onPress={() => goTab("courts")}
@@ -77,7 +101,7 @@ function HomeTab({ openCourt, openChat, openNotifications, goTab, profile, user,
       <View style={{ paddingHorizontal: S.xl, marginTop: S.xxl }}>
         <SectionTitle action="Open feed" onAction={() => goTab("feed")}>Community highlights</SectionTitle>
         <View style={{ marginTop: S.md }}>
-          {postsLoading ? <ActivityIndicator color={C.volt} /> : posts.length ? posts.slice(0, 3).map((p) => (
+          {postsLoading ? <><PostCardSkeleton /><PostCardSkeleton /></> : posts.length ? posts.slice(0, 3).map((p) => (
             <PostCardCompact key={p.id} p={p} onPress={() => goTab("feed")} />
           )) : <EmptyCard icon="chatbubbles-outline" title="It's quiet here" message="Share a game update to get the community going." />}
         </View>
@@ -104,6 +128,17 @@ export function HomeScreen() {
   const { session } = useAuth();
   const dashboard = useDashboard();
   const feed = useCommunityFeed();
+  const { pending, reload: reloadRecords } = useGameRecords();
+  const { reload: reloadOpenPlay } = useOpenPlay();
+  const [refreshing, setRefreshing] = useState(false);
+  // Pull to refresh: the dashboard reloads in the background (its cards show
+  // their own loading state); the spinner waits for the feed, matches and games.
+  const refresh = async () => {
+    setRefreshing(true);
+    dashboard.reload();
+    await Promise.all([feed.loadFirstPage(), reloadRecords(), reloadOpenPlay()]);
+    setRefreshing(false);
+  };
   const { setDetail, setChatView, setNotificationView, unreadMessages, unreadNotifications } = useOverlayNav();
   const goTab = useGoTab();
   return (
@@ -124,7 +159,18 @@ export function HomeScreen() {
         postsError={feed.postsError}
         unreadMessages={unreadMessages}
         unreadNotifications={unreadNotifications}
+        pendingMatches={pending.length}
+        onToggleFavorite={dashboard.favoritesSupported ? dashboard.toggleFavorite : undefined}
+        refreshing={refreshing}
+        onRefresh={refresh}
       />
     </ScreenFrame>
   );
 }
+
+const homeStyles = StyleSheet.create({
+  nudge: { flexDirection: "row", alignItems: "center", marginHorizontal: S.xl, marginTop: S.md, padding: S.md, borderRadius: R.lg, backgroundColor: "rgba(255,239,179,0.1)", borderWidth: 1, borderColor: "rgba(255,239,179,0.35)" },
+  nudgeIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: C.butter, alignItems: "center", justifyContent: "center" },
+  nudgeTitle: { color: C.paper, fontSize: 14, fontWeight: "700" },
+  nudgeBody: { color: C.textDim, fontSize: 12.5, marginTop: 2 },
+});

@@ -48,7 +48,13 @@
           "photosPermission": "Allow DinkTagum to access your photos to set a profile picture or share a game photo."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "color": "#E3EF26"
+        }
+      ]
     ]
   }
 }

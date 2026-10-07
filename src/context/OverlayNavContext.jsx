@@ -45,24 +45,26 @@ export function OverlayNavProvider({ children }) {
 
   const hasOverlay = Boolean(detail || chatView || notificationView || adminView);
 
-  // Every overlay ("module") already has an on-screen back arrow, but Android's
-  // hardware/gesture back button was never wired to any of them, so pressing it
-  // fell through to the OS default (minimizing or exiting the app) instead of
-  // closing whatever was open. This mirrors each overlay's own onBack handler
-  // (see AppOverlays) so hardware back behaves the same as tapping the arrow.
+  // Steps back one level, mirroring each overlay's own on-screen back arrow
+  // (see AppOverlays). Returns false when nothing was open.
+  const goBack = useCallback(() => {
+    if (notificationView) setNotificationView(false);
+    else if (adminView) setAdminView(false);
+    else if (chatView && chatView !== "list") setChatView("list");
+    else if (chatView) setChatView(null);
+    else if (detail) setDetail(null);
+    else return false;
+    return true;
+  }, [notificationView, adminView, chatView, detail]);
+
+  // Android hardware/gesture back. While the overlay Modal is showing, Android
+  // routes back presses to the Modal's onRequestClose instead (which also calls
+  // goBack), so this mainly covers the moment the Modal is closing.
   useEffect(() => {
     if (!hasOverlay) return undefined;
-    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
-      if (notificationView) setNotificationView(false);
-      else if (adminView) setAdminView(false);
-      else if (chatView && chatView !== "list") setChatView("list");
-      else if (chatView) setChatView(null);
-      else if (detail) setDetail(null);
-      else return false;
-      return true;
-    });
+    const subscription = BackHandler.addEventListener("hardwareBackPress", goBack);
     return () => subscription.remove();
-  }, [hasOverlay, notificationView, adminView, chatView, detail]);
+  }, [hasOverlay, goBack]);
 
   const refreshUnreadNotifications = useCallback(async () => {
     if (!supabase) return;
@@ -118,6 +120,7 @@ export function OverlayNavProvider({ children }) {
     adminView,
     setAdminView,
     hasOverlay,
+    goBack,
     closeOverlays,
     unreadNotifications,
     unreadMessages,

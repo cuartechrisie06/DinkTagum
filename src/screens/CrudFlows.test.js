@@ -37,7 +37,13 @@ jest.mock("../../lib/supabase", () => {
     isSupabaseConfigured: true,
     supabase: {
       from: (table) => builder(table),
-      rpc: (name, args) => { calls.push(["rpc", name, args]); return Promise.resolve({ data: [], error: null }); },
+      rpc: (name, args) => {
+        calls.push(["rpc", name, args]);
+        const data = name === "list_pending_match_confirmations"
+          ? [{ record_id: "m1", reporter_id: "u2", reporter_name: "Ben", played_on: "2026-01-03", reporter_score: 11, my_score: 6 }]
+          : [];
+        return Promise.resolve({ data, error: null });
+      },
       auth: { getUser: () => Promise.resolve({ data: { user: { id: "u1", app_metadata: { role: "admin" } } }, error: null }) },
       channel: () => ({ on() { return this; }, subscribe() { return this; } }),
       removeChannel: () => {},
@@ -52,6 +58,7 @@ jest.mock("../context/AuthContext", () => ({ useAuth: () => ({ session: { user: 
 const { SafeAreaProvider } = require("react-native-safe-area-context");
 const { DashboardProvider } = require("../context/DashboardContext");
 const { GameRecordsProvider } = require("../context/GameRecordsContext");
+const { OverlayNavProvider } = require("../context/OverlayNavContext");
 const { HistoryScreen } = require("./HistoryScreen");
 const { AdminTab } = require("./AdminTab");
 const { NotificationCenter } = require("./NotificationCenter");
@@ -60,7 +67,7 @@ const { CommunityFeedProvider } = require("../context/CommunityFeedContext");
 
 const wrap = (el) => (
   <SafeAreaProvider initialMetrics={{ frame: { x: 0, y: 0, width: 375, height: 812 }, insets: { top: 0, left: 0, right: 0, bottom: 0 } }}>
-    <DashboardProvider><GameRecordsProvider>{el}</GameRecordsProvider></DashboardProvider>
+    <DashboardProvider><GameRecordsProvider><OverlayNavProvider>{el}</OverlayNavProvider></GameRecordsProvider></DashboardProvider>
   </SafeAreaProvider>
 );
 const press = async (tree, label) => {
@@ -68,9 +75,13 @@ const press = async (tree, label) => {
   if (!node) throw new Error(`No pressable "${label}" in: ${[...new Set(tree.root.findAll((n) => n.props.accessibilityLabel).map((n) => n.props.accessibilityLabel))].join(" | ")}`);
   await act(async () => { await node.props.onPress(); });
 };
-const render = async (el) => { let tree; await act(async () => { tree = renderer.create(wrap(el)); }); await act(async () => {}); return tree; };
+// Every rendered tree is unmounted after its test so provider timers and
+// realtime subscriptions don't outlive the test (and keep Jest from exiting).
+const mounted = [];
+const render = async (el) => { let tree; await act(async () => { tree = renderer.create(wrap(el)); }); await act(async () => {}); mounted.push(tree); return tree; };
 
 beforeEach(() => { calls.length = 0; });
+afterEach(async () => { while (mounted.length) { const tree = mounted.pop(); await act(async () => tree.unmount()); } });
 
 it("History: deletes a match and cancels a reservation", async () => {
   const tree = await render(<HistoryScreen />);
@@ -91,6 +102,18 @@ it("History: creates a match", async () => {
   await input("Opponent score", "9");
   await press(tree, "Save match");
   expect(calls.find((c) => c[0] === "game_records" && c[1] === "insert")[2]).toMatchObject({ opponents: "Carlo", player_score: 11, opponent_score: 9, player_id: "u1" });
+}, 60000);
+
+it("History: confirms a match another player recorded", async () => {
+  const tree = await render(<HistoryScreen />);
+  await press(tree, "Confirm match with Ben");
+  expect(calls).toContainEqual(["rpc", "respond_match_confirmation", { p_record_id: "m1", p_confirm: true }]);
+}, 60000);
+
+it("History: disputes a match another player recorded", async () => {
+  const tree = await render(<HistoryScreen />);
+  await press(tree, "Dispute match with Ben");
+  expect(calls).toContainEqual(["rpc", "respond_match_confirmation", { p_record_id: "m1", p_confirm: false }]);
 }, 60000);
 
 it("Admin: confirms a reservation (with notification), deletes a court and a reported post", async () => {

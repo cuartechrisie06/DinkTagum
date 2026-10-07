@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, FlatList, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, SectionList, Text, TouchableOpacity, View } from "react-native";
 import { supabase } from "../../lib/supabase";
-import { relativeTime } from "../utils/format";
-import { Button, C, EmptyCard, ErrorNote, Icon, OverlayHeader, S, styles } from "./shared";
+import { groupByRecency, relativeTime } from "../utils/format";
+import { C, EmptyCard, ErrorNote, Icon, IconBtn, OverlayHeader, S, styles } from "./shared";
 import { notify } from "../utils/confirm";
 
-const KIND_ICONS = { message: "chatbubble-ellipses", reservation: "calendar", game_invitation: "tennisball", community: "people", system: "information-circle", connection: "person-add" };
+// Shared with the in-app banner (AppOverlays) so both route the same way.
+export const KIND_ICONS = { message: "chatbubble-ellipses", reservation: "calendar", game_invitation: "tennisball", community: "people", system: "information-circle", connection: "person-add", open_play: "people-circle", match: "shield-checkmark" };
+
+const KIND_LABELS = { game_invitation: "game invite", open_play: "open play", match: "match result" };
 
 const KIND_HINTS = {
   message: " · Tap to open chat",
@@ -13,7 +16,17 @@ const KIND_HINTS = {
   game_invitation: " · Tap to view players",
   connection: " · Tap to view players",
   community: " · Tap to view feed",
+  open_play: " · Tap to view open games",
+  match: " · Tap to view matches",
 };
+
+// Where a non-message notification takes the player.
+export function notificationRoute(kind) {
+  if (kind === "reservation" || kind === "match") return "/history";
+  if (kind === "connection" || kind === "game_invitation") return "/directory";
+  if (kind === "community") return "/feed";
+  return "/";
+}
 
 export function NotificationCenter({ user, onBack, onOpenConversation, onNavigate }) {
   const [notifications, setNotifications] = useState([]);
@@ -60,18 +73,10 @@ export function NotificationCenter({ user, onBack, onOpenConversation, onNavigat
       if (onOpenConversation) {
         onOpenConversation(notification.related_id);
       }
-    } else if (notification.kind === "reservation") {
-      if (onNavigate) onNavigate("/history");
-      else onBack?.();
-    } else if (notification.kind === "connection" || notification.kind === "game_invitation") {
-      if (onNavigate) onNavigate("/directory");
-      else onBack?.();
-    } else if (notification.kind === "community") {
-      if (onNavigate) onNavigate("/feed");
-      else onBack?.();
+    } else if (onNavigate) {
+      onNavigate(notificationRoute(notification.kind));
     } else {
-      if (onNavigate) onNavigate("/");
-      else onBack?.();
+      onBack?.();
     }
   };
 
@@ -81,13 +86,17 @@ export function NotificationCenter({ user, onBack, onOpenConversation, onNavigat
       title="Notifications"
       subtitle={unreadCount ? `${unreadCount} unread` : "Updates about your games and reservations"}
       onBack={onBack}
-      right={unreadCount ? <Button variant="ghost" icon="checkmark-done" label="Mark all read" onPress={markAllRead} style={{ minHeight: 34, paddingHorizontal: S.md }} /> : null}
+      right={unreadCount ? <IconBtn name="checkmark-done" variant="ghost" onPress={markAllRead} accessibilityLabel="Mark all read" /> : null}
     />
-    <FlatList
+    <SectionList
       style={styles.screen}
-      contentContainerStyle={{ padding: S.xl, paddingBottom: 32 }}
-      data={loading ? [] : notifications}
+      contentContainerStyle={{ padding: S.xl, paddingTop: S.sm, paddingBottom: 32 }}
+      sections={loading ? [] : groupByRecency(notifications)}
       keyExtractor={(notification) => notification.id}
+      stickySectionHeadersEnabled={false}
+      renderSectionHeader={({ section }) => (
+        <Text style={{ color: C.textDim, fontSize: 12, fontWeight: "800", letterSpacing: 0.8, textTransform: "uppercase", marginTop: S.md, marginBottom: S.sm }} accessibilityRole="header">{section.title}</Text>
+      )}
       renderItem={({ item: notification }) => (
         <TouchableOpacity
           onPress={() => openNotification(notification)}
@@ -100,7 +109,7 @@ export function NotificationCenter({ user, onBack, onOpenConversation, onNavigat
           </View>
           <View style={{ flex: 1 }}>
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <Text style={styles.notificationKind}>{notification.kind.replace("_", " ")}</Text>
+              <Text style={styles.notificationKind}>{KIND_LABELS[notification.kind] || notification.kind.replace(/_/g, " ")}</Text>
               {!notification.is_read ? <View style={[styles.unreadDot, { marginLeft: 0 }]} /> : null}
             </View>
             <Text style={styles.notificationTitle}>{notification.title}</Text>
