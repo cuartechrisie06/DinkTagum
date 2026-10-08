@@ -51,7 +51,7 @@ export function ChatList({ onBack, openThread }) {
   }, [session.user.id]);
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={styles.screen} edges={["bottom", "left", "right"]}>
       <OverlayHeader title="Chats" onBack={onBack} />
       <ScrollView contentContainerStyle={{ paddingHorizontal: S.xl, paddingTop: S.xs, paddingBottom: S.xl }}>
         {loading ? <ActivityIndicator color={C.volt} style={{ marginTop: 16 }} /> : conversations.length ? conversations.map((c) => {

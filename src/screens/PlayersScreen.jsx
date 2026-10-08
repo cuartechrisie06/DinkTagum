@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { ActivityIndicator, FlatList, RefreshControl, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, FlatList, RefreshControl, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { useOverlayNav } from "../context/OverlayNavContext";
 import { initialsFor } from "../utils/format";
-import { Avatar, Button, C, EmptyCard, ErrorNote, HeaderBar, Icon, IconBtn, S, ScreenFrame, styles } from "./shared";
+import { Avatar, Button, C, ChipScroller, EmptyCard, ErrorNote, HeaderBar, Icon, IconBtn, S, ScreenFrame, styles } from "./shared";
 import { notify } from "../utils/confirm";
 
 const PAGE_SIZE = 40;
@@ -28,6 +28,15 @@ export function filterPlayers(players, { query = "", gameType = "All", skill = "
       && level >= band.min && level <= band.max
       && (!times.length || (player.availability || []).some((t) => times.includes(t)));
   });
+}
+
+// Header count, derived from the exact array the list renders so the number
+// can never disagree with what's on screen.
+export function directorySummary({ loading, visible, loaded, filtersActive }) {
+  if (loading) return "Loading player directory…";
+  const plural = (n) => `${n} player${n === 1 ? "" : "s"}`;
+  if (filtersActive) return `${plural(visible.length)} match${visible.length === 1 ? "es" : ""} · ${loaded.length} in directory`;
+  return `${plural(visible.length)} in Tagum City`;
 }
 
 function connectionLabel(state) {
@@ -153,7 +162,9 @@ function PlayersTab({ user }) {
   };
 
   const visiblePlayers = filterPlayers(players, { query, gameType, skill, times });
-  const filtersActive = Boolean(query || gameType !== "All" || skill !== "any" || times.length);
+  const filtersActive = Boolean(query.trim() || gameType !== "All" || skill !== "any" || times.length);
+  // The one array both the list and the header count read from.
+  const listData = loading ? [] : visiblePlayers;
   const toggleTime = (t) => setTimes((current) => (current.includes(t) ? current.filter((x) => x !== t) : [...current, t]));
   const chip = (key, label, active, onPress) => (
     <TouchableOpacity key={key} onPress={onPress} style={[styles.chip, { minHeight: 44, justifyContent: "center" }, active && styles.chipActive]} accessibilityRole="button" accessibilityState={{ selected: active }} accessibilityLabel={label}>
@@ -165,7 +176,7 @@ function PlayersTab({ user }) {
     <FlatList
       style={styles.screen}
       contentContainerStyle={{ paddingBottom: 32 }}
-      data={loading ? [] : visiblePlayers}
+      data={listData}
       keyExtractor={(p) => p.id}
       keyboardShouldPersistTaps="handled"
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={C.volt} colors={[C.volt]} progressBackgroundColor={C.surface} />}
@@ -218,7 +229,7 @@ function PlayersTab({ user }) {
       }}
       ListHeaderComponent={
         <>
-          <HeaderBar showBack title="Find Players" subtitle={loading ? "Loading player directory…" : `${visiblePlayers.length} player${visiblePlayers.length === 1 ? "" : "s"} in Tagum City`} />
+          <HeaderBar showBack title="Find Players" subtitle={directorySummary({ loading, visible: listData, loaded: players, filtersActive })} />
           <View style={{ paddingHorizontal: S.xl, marginTop: S.lg }}>
             <View style={styles.searchField}>
               <Icon name="search" size={18} color={C.textDim} />
@@ -227,19 +238,19 @@ function PlayersTab({ user }) {
             </View>
           </View>
           <Text style={playerFilterLabel}>Game type</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: S.xl }}>
+          <ChipScroller>
             {["All", "Singles", "Doubles"].map((type) => chip(type, type, gameType === type, () => setGameType(type)))}
-          </ScrollView>
+          </ChipScroller>
           <Text style={playerFilterLabel}>Skill level</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: S.xl }}>
+          <ChipScroller>
             {SKILL_FILTERS.map((band) => chip(band.key, band.label, skill === band.key, () => setSkill(band.key)))}
-          </ScrollView>
+          </ChipScroller>
           {availabilitySupported ? (
             <>
               <Text style={playerFilterLabel}>Usually plays</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={{ paddingHorizontal: S.xl }}>
+              <ChipScroller>
                 {AVAILABILITY.map((t) => chip(t, t, times.includes(t), () => toggleTime(t)))}
-              </ScrollView>
+              </ChipScroller>
             </>
           ) : null}
           <View style={{ height: S.lg }} />

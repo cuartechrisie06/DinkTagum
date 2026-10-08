@@ -5,7 +5,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { isSupabaseConfigured, supabase } from "../../lib/supabase";
 import { useAuth } from "../context/AuthContext";
-import { Button, C, Icon, R, S, ScreenFrame, styles } from "./shared";
+import { Button, C, Icon, R, S, ScreenFrame, styles, useTopInset } from "./shared";
 
 const PASSWORD_HINT = "8+ characters, mixed case + a number";
 // Brighter than C.textFaint so placeholder text stays readable on the dark fields.
@@ -66,11 +66,13 @@ function EyeToggle({ shown, onToggle }) {
 // Shared frame for every auth screen: hero up top, form centered below, and
 // the whole thing scrolls/lifts out of the keyboard's way on both platforms.
 function AuthLayout({ icon, title, subtitle, showFeatures, children }) {
+  // Top inset applied by hand: the hero's pill row sat under the status bar.
+  const top = useTopInset();
   return (
     <ScreenFrame>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : "height"}>
-        <SafeAreaView style={{ flex: 1 }}>
-          <ScrollView contentContainerStyle={authStyles.scroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
+        <SafeAreaView style={{ flex: 1 }} edges={["bottom", "left", "right"]}>
+          <ScrollView contentContainerStyle={[authStyles.scroll, { paddingTop: top + S.xxl }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
             <View style={authStyles.hero}>
               <LinearGradient colors={[C.volt, "#B9D61F"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={authStyles.logo}>
                 <Icon name={icon} size={30} color={C.ink} />

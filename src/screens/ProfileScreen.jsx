@@ -9,12 +9,13 @@ import { initialsFor, skillTier } from "../utils/format";
 import { calculateProfileStats, matchHistoryFromRecords } from "../utils/profileStats";
 import { uploadImageAsync } from "../utils/uploadImage";
 import { useGoTab } from "./HomeScreen";
-import { Avatar, Button, C, EmptyCard, ErrorNote, FieldError, Icon, IconBtn, R, S, ScreenFrame, SectionTitle, TabBackButton, profileName, styles } from "./shared";
+import { Avatar, Button, C, EmptyCard, ErrorNote, FieldError, Icon, IconBtn, R, S, ScreenFrame, SectionTitle, TabBackButton, profileName, styles, useTopInset } from "./shared";
 import { notify } from "../utils/confirm";
 
 const AVAILABILITY = ["Weekday mornings", "Weekday evenings", "Weekends"];
 
 function ProfileTab({ onSignOut, profile, user, saveProfile, savingProfile, isAdmin, openAdmin, openHistory, availabilitySupported }) {
+  const top = useTopInset();
   const [editing, setEditing] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [location, setLocation] = useState("");
@@ -96,7 +97,7 @@ function ProfileTab({ onSignOut, profile, user, saveProfile, savingProfile, isAd
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={{ paddingBottom: 32 }} keyboardShouldPersistTaps="handled">
-      <View style={styles.headerRow}>
+      <View style={[styles.headerRow, { paddingTop: top + S.lg }]}>
         <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: S.md }}>
           <TabBackButton />
           <Text style={styles.headerTitle} accessibilityRole="header">Profile</Text>

@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { ActivityIndicator, Animated, Image, Modal, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
+import { SafeAreaInsetsContext } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { ratingLabel } from "../utils/courts";
 
@@ -17,8 +18,12 @@ export const C = {
   line: "rgba(226,251,206,0.12)",
   lineStrong: "rgba(226,251,206,0.22)",
   textDim: "rgba(255,253,238,0.66)",
-  textFaint: "rgba(255,253,238,0.42)",
+  // 0.58 keeps hint/placeholder text at WCAG AA (≥4.5:1) on ink, surface
+  // and surface2; see src/utils/contrast.test.js.
+  textFaint: "rgba(255,253,238,0.58)",
   voltSoft: "rgba(227,239,38,0.14)",
+  // Outline for tappable controls (slots, chips): ≥3:1 against the surface.
+  lineControl: "rgba(226,251,206,0.4)",
 };
 
 // Shared spacing / radius scale so every screen lines up on the same grid.
@@ -29,6 +34,14 @@ export function profileName(profile, user) {
   return profile?.display_name || user?.user_metadata?.display_name || user?.email?.split("@")[0] || "Player";
 }
 
+// Status-bar height to keep headers clear of it. The app draws edge to edge
+// (and overlays open in a translucent Modal), so nothing else pads the top.
+// Reads the context directly so screens rendered without a provider (tests)
+// get 0 instead of throwing.
+export function useTopInset() {
+  return useContext(SafeAreaInsetsContext)?.top ?? 0;
+}
+
 // Every tab screen sits on the same backdrop: a soft brand-green glow at the
 // top that fades into the ink background, which gives the flat dark UI depth.
 export function ScreenFrame({ children }) {
@@ -37,6 +50,45 @@ export function ScreenFrame({ children }) {
       <StatusBar barStyle="light-content" />
       <LinearGradient pointerEvents="none" colors={["rgba(7,102,83,0.55)", "rgba(7,102,83,0.12)", "rgba(6,35,29,0)"]} locations={[0, 0.45, 1]} style={styles.backdropGlow} />
       {children}
+    </View>
+  );
+}
+
+// Pure: whether a horizontal row still has content past its right edge.
+export function hasMoreToRight({ offsetX = 0, viewWidth = 0, contentWidth = 0 }) {
+  return contentWidth - (offsetX + viewWidth) > 8;
+}
+
+// Horizontal chip row. The last chip gets room to clear the edge, and a fade
+// on the right shows there's more to scroll until the end is reached.
+export function ChipScroller({ children, style, contentContainerStyle, fadeColor = C.ink, ...scrollProps }) {
+  const [metrics, setMetrics] = useState({ offsetX: 0, viewWidth: 0, contentWidth: 0 });
+  const update = (patch) => setMetrics((current) => ({ ...current, ...patch }));
+  const showFade = hasMoreToRight(metrics);
+  return (
+    <View style={[{ flexGrow: 0 }, style]}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ flexGrow: 0 }}
+        contentContainerStyle={[{ paddingLeft: S.xl, paddingRight: S.xl + S.lg }, contentContainerStyle]}
+        onLayout={(e) => update({ viewWidth: e.nativeEvent.layout.width })}
+        onContentSizeChange={(width) => update({ contentWidth: width })}
+        onScroll={(e) => update({ offsetX: e.nativeEvent.contentOffset.x })}
+        scrollEventThrottle={32}
+        {...scrollProps}
+      >
+        {children}
+      </ScrollView>
+      {showFade ? (
+        <LinearGradient
+          pointerEvents="none"
+          colors={[`${fadeColor}00`, fadeColor]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.chipFade}
+        />
+      ) : null}
     </View>
   );
 }
@@ -211,8 +263,9 @@ export function TabBackButton() {
 
 // Header for full-screen overlays (notifications, admin, chats).
 export function OverlayHeader({ title, subtitle, onBack, right }) {
+  const top = useTopInset();
   return (
-    <View style={styles.overlayHeader}>
+    <View style={[styles.overlayHeader, { paddingTop: top + S.md }]}>
       <BackButton onPress={onBack} />
       <View style={{ flex: 1, marginLeft: S.md }}>
         <Text style={styles.overlayTitle} accessibilityRole="header" numberOfLines={1}>{title}</Text>
@@ -256,8 +309,9 @@ export function FieldError({ message }) {
 }
 
 export function HeaderBar({ eyebrow, title, subtitle, onChat, onNotifications, chatBadge, notificationBadge, showBack }) {
+  const top = useTopInset();
   return (
-    <View style={styles.headerRow}>
+    <View style={[styles.headerRow, { paddingTop: top + S.lg }]}>
       {showBack ? <View style={{ marginRight: S.md }}><TabBackButton /></View> : null}
       <View style={{ flex: 1, paddingRight: S.md }}>
         {eyebrow ? <Text style={styles.headerEyebrow}>{eyebrow}</Text> : null}
@@ -608,6 +662,7 @@ export function PostCardCompact({ p, onPress }) {
 const card = { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line };
 
 export const styles = StyleSheet.create({
+  chipFade: { position: "absolute", top: 0, bottom: 0, right: 0, width: 44 },
   inputError: { borderColor: C.butter },
   fieldErrorRow: { flexDirection: "row", alignItems: "flex-start", gap: 6, marginTop: 4 },
   fieldErrorText: { color: C.butter, fontSize: 12.5, lineHeight: 17, flex: 1 },
@@ -723,7 +778,7 @@ export const styles = StyleSheet.create({
   commentInput: { flex: 1, backgroundColor: C.surface2, borderRadius: R.pill, paddingHorizontal: S.md, paddingVertical: 9, color: C.paper, fontSize: 13.5, marginRight: S.sm },
   commentSendBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: C.volt, alignItems: "center", justifyContent: "center" },
 
-  chip: { borderWidth: 1, borderColor: C.lineStrong, borderRadius: R.pill, paddingHorizontal: S.lg, paddingVertical: S.sm, marginRight: S.sm },
+  chip: { borderWidth: 1, borderColor: C.lineControl, borderRadius: R.pill, paddingHorizontal: S.lg, paddingVertical: S.sm, marginRight: S.sm },
   chipActive: { backgroundColor: C.volt, borderColor: C.volt },
   chipText: { color: C.mist, fontSize: 13, fontWeight: "700" },
   chipTextActive: { color: C.ink },

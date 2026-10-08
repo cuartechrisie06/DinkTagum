@@ -3,8 +3,9 @@ import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Tex
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { buildDayOptions, slotHasStarted, slotOverlapsBusy, useDashboard } from "../context/DashboardContext";
-import { BackButton, Button, C, CourtArt, ErrorNote, Icon, R, S, SectionTitle, StatusPill, styles } from "./shared";
+import { BackButton, Button, C, CourtArt, ErrorNote, Icon, R, S, SectionTitle, StatusPill, styles, useTopInset } from "./shared";
 import { CourtOpenPlay } from "./OpenPlay";
+import { SLOT_COLORS, SLOT_LEGEND } from "./slotColors";
 import { openDirections } from "../utils/directions";
 import { BOOKING_SLOTS, distanceFromCenterLabel, ratingLabel } from "../utils/courts";
 import { bookingPrice, findNextAvailable, peso, selectionAvailable, selectionSlots, slotStart, timeRangeLabel, toggleSlot } from "../utils/booking";
@@ -130,6 +131,7 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
   const { courts, reservations, hasLocation, findNearbyCourts, locationLoading, locationMessage } = useDashboard();
   // The live copy picks up distance once location arrives, favorites, etc.
   const court = courts.find((c) => c.id === initialCourt.id) || initialCourt;
+  const top = useTopInset();
   const dayOptions = useMemo(() => buildDayOptions(BOOKING_DAYS), []);
   const [dayKey, setDayKey] = useState(dayOptions[0].key);
   const [selection, setSelection] = useState(null);
@@ -244,7 +246,7 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
         <View style={styles.detailHero}>
           {cover ? <Image source={{ uri: cover }} style={StyleSheet.absoluteFillObject} accessibilityIgnoresInvertColors /> : <CourtArt />}
           <LinearGradient colors={["transparent", C.ink]} style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 90 }} />
-          <View style={styles.detailBack}><BackButton onPress={onBack} /></View>
+          <View style={[styles.detailBack, { top: top + S.sm }]}><BackButton onPress={onBack} /></View>
         </View>
 
         <View style={{ paddingHorizontal: S.xl, marginTop: -S.lg }}>
@@ -341,10 +343,10 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
           </ScrollView>
 
           <View style={detailStyles.legend}>
-            {[["Free", C.surface, C.line], ["Selected", C.voltSoft, C.volt], ["Taken", "rgba(255,253,238,0.03)", "transparent"]].map(([label, bg, border]) => (
+            {SLOT_LEGEND.map(([label, key]) => (
               <View key={label} style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                <View style={[detailStyles.legendSwatch, { backgroundColor: bg, borderColor: border }]} />
-                <Text style={styles.profileHint}>{label}</Text>
+                <View style={[detailStyles.legendSwatch, { backgroundColor: SLOT_COLORS[key].bg, borderColor: SLOT_COLORS[key].border, borderStyle: SLOT_COLORS[key].borderStyle }]} />
+                <Text style={[styles.profileHint, { color: C.textDim }]}>{label}</Text>
               </View>
             ))}
           </View>
@@ -356,6 +358,7 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
                 const isPast = slotHasStarted(selectedDay.date, s, now);
                 const blocked = isBooked || isPast;
                 const active = selectionSlots(selection).includes(s) && !blocked;
+                const look = SLOT_COLORS[isBooked ? "taken" : isPast ? "started" : active ? "selected" : "free"];
                 return (
                   <TouchableOpacity
                     key={s}
@@ -364,16 +367,14 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
                     style={[
                       styles.slotBtn,
                       detailStyles.slot,
-                      { borderColor: active ? C.volt : C.line },
-                      active && { backgroundColor: C.voltSoft },
-                      blocked && { backgroundColor: "rgba(255,253,238,0.03)", borderColor: "transparent" },
+                      { backgroundColor: look.bg, borderColor: look.border, borderStyle: look.borderStyle },
                     ]}
                     accessibilityRole="button"
                     accessibilityState={{ selected: active, disabled: blocked || bookingDisabled }}
                     accessibilityLabel={isBooked ? `${s}, already booked` : isPast ? `${s}, already started` : `${s}${court.hourlyRate !== null ? `, ${peso(court.hourlyRate)}` : ""}${active ? ", selected" : ""}`}
                   >
-                    <Text style={[styles.slotText, { color: blocked ? "rgba(255,253,238,0.25)" : active ? C.volt : C.paper }, isBooked && { textDecorationLine: "line-through" }]}>{s}</Text>
-                    <Text style={[detailStyles.slotSub, { color: blocked ? "rgba(255,253,238,0.25)" : active ? C.volt : C.textDim }]}>
+                    <Text style={[styles.slotText, { color: look.text }, isBooked && { textDecorationLine: "line-through" }]}>{s}</Text>
+                    <Text style={[detailStyles.slotSub, { color: look.sub }]}>
                       {isBooked ? "Taken" : isPast ? "Started" : court.hourlyRate !== null ? peso(court.hourlyRate) : "Free"}
                     </Text>
                   </TouchableOpacity>
@@ -429,7 +430,7 @@ const detailStyles = StyleSheet.create({
   locationPrompt: { flexDirection: "row", alignItems: "center", gap: S.md, minHeight: 56, marginTop: S.lg, padding: S.md, borderRadius: R.md, backgroundColor: C.voltSoft, borderWidth: 1, borderColor: "rgba(227,239,38,0.25)" },
   locationTitle: { color: C.paper, fontSize: 14, fontWeight: "700" },
   dayChip: { flex: 0, minWidth: 92, minHeight: 44, paddingHorizontal: S.md, justifyContent: "center" },
-  legend: { flexDirection: "row", gap: S.lg, marginTop: S.md },
+  legend: { flexDirection: "row", flexWrap: "wrap", columnGap: S.lg, rowGap: S.xs, marginTop: S.md },
   legendSwatch: { width: 14, height: 14, borderRadius: 4, borderWidth: 1 },
   slot: { minHeight: 56, justifyContent: "center" },
   slotSub: { fontSize: 11, fontWeight: "700", marginTop: 2 },

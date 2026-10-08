@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { FlatList, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { FlatList, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { insideBounds } from "../components/leafletMapHtml";
 import { useDashboard } from "../context/DashboardContext";
 import { useOverlayNav } from "../context/OverlayNavContext";
 import { activeFilterCount, amenityOptions, DEFAULT_FILTERS, filterCourts, SORTS, sortCourts } from "../utils/courts";
 import { CourtFilterSheet } from "./CourtFilterSheet";
 import { CourtsMapPanel } from "./CourtsMapPanel";
-import { Button, C, CourtCard, CourtCardSkeleton, EmptyCard, ErrorNote, HeaderBar, Icon, R, S, ScreenFrame, styles } from "./shared";
+import { Button, C, ChipScroller, CourtCard, CourtCardSkeleton, EmptyCard, ErrorNote, HeaderBar, Icon, R, S, ScreenFrame, styles } from "./shared";
 
 const STATUSES = ["All", "Available", "Full", "Closed"];
 const BAR = { id: "__find-bar", bar: true };
@@ -44,7 +44,7 @@ function FindBar({ query, setQuery, status, setStatus, counts, sortLabel, filter
           {filterCount ? <View style={courtStyles.filterBadge}><Text style={courtStyles.filterBadgeText}>{filterCount}</Text></View> : null}
         </TouchableOpacity>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={courtStyles.chipRow} contentContainerStyle={{ paddingHorizontal: S.xl, alignItems: "center" }} keyboardShouldPersistTaps="handled">
+      <ChipScroller style={courtStyles.chipRow} contentContainerStyle={{ alignItems: "center" }} keyboardShouldPersistTaps="handled">
         <TouchableOpacity onPress={onOpenSheet} style={[styles.chip, courtStyles.chip, courtStyles.sortChip]} accessibilityRole="button" accessibilityLabel={`Sorted by ${sortLabel}. Change sort`}>
           <Icon name="swap-vertical" size={14} color={C.volt} style={{ marginRight: 4 }} />
           <Text style={[styles.chipText, { color: C.volt }]}>{sortLabel}</Text>
@@ -54,7 +54,7 @@ function FindBar({ query, setQuery, status, setStatus, counts, sortLabel, filter
             <Text style={[styles.chipText, status === f && styles.chipTextActive]}>{f} <Text style={{ opacity: 0.7 }}>{counts[f]}</Text></Text>
           </TouchableOpacity>
         ))}
-      </ScrollView>
+      </ChipScroller>
     </View>
   );
 }
