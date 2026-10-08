@@ -4,6 +4,7 @@ import { supabase } from "../../lib/supabase";
 import { groupByRecency, relativeTime } from "../utils/format";
 import { C, EmptyCard, ErrorNote, Icon, IconBtn, OverlayHeader, S, styles } from "./shared";
 import { notify } from "../utils/confirm";
+import { dedupeNotifications } from "../utils/notifications";
 
 // Shared with the in-app banner (AppOverlays) so both route the same way.
 export const KIND_ICONS = { message: "chatbubble-ellipses", reservation: "calendar", game_invitation: "tennisball", community: "people", system: "information-circle", connection: "person-add", open_play: "people-circle", match: "shield-checkmark" };
@@ -52,14 +53,18 @@ export function NotificationCenter({ user, onBack, onOpenConversation, onNavigat
     return () => { active = false; supabase.removeChannel(channel); };
   }, [user?.id]);
 
+  // Identical repeats (e.g. old "Reservation received" rows) show once.
+  const visible = dedupeNotifications(notifications);
+
   const markRead = async (notification) => {
     if (notification.is_read || !supabase) return;
-    const { error: updateError } = await supabase.from("notifications").update({ is_read: true }).eq("id", notification.id).eq("recipient_id", user.id);
+    const ids = notification.ids || [notification.id];
+    const { error: updateError } = await supabase.from("notifications").update({ is_read: true }).in("id", ids).eq("recipient_id", user.id);
     if (updateError) { notify("Could not update notification", updateError.message); return; }
-    setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, is_read: true } : item));
+    setNotifications((current) => current.map((item) => (ids.includes(item.id) ? { ...item, is_read: true } : item)));
   };
 
-  const unreadCount = notifications.filter((item) => !item.is_read).length;
+  const unreadCount = visible.filter((item) => !item.is_read).length;
   const markAllRead = async () => {
     if (!supabase || !unreadCount) return;
     const { error: updateError } = await supabase.from("notifications").update({ is_read: true }).eq("recipient_id", user.id).eq("is_read", false);
@@ -91,7 +96,7 @@ export function NotificationCenter({ user, onBack, onOpenConversation, onNavigat
     <SectionList
       style={styles.screen}
       contentContainerStyle={{ padding: S.xl, paddingTop: S.sm, paddingBottom: 32 }}
-      sections={loading ? [] : groupByRecency(notifications)}
+      sections={loading ? [] : groupByRecency(visible)}
       keyExtractor={(notification) => notification.id}
       stickySectionHeadersEnabled={false}
       renderSectionHeader={({ section }) => (

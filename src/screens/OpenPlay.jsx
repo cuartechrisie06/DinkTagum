@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
-import { buildDayOptions, slotHasStarted } from "../context/DashboardContext";
+import { buildDayOptions, slotHasStarted, useDashboard } from "../context/DashboardContext";
+import { BOOKING_SLOTS } from "../utils/courts";
 import { OPEN_PLAY_FORMATS, SKILL_RANGES, skillLabel, useOpenPlay } from "../context/OpenPlayContext";
-import { confirmAction } from "../utils/confirm";
+import { confirmAction, notify } from "../utils/confirm";
 import { gameTimeLabel, initialsFor } from "../utils/format";
 import { Avatar, Button, C, EmptyCard, ErrorNote, Icon, R, S, SectionTitle, styles } from "./shared";
 
@@ -87,8 +88,16 @@ export function OpenGameCard({ game, onOpenCourt, showCourt = true }) {
   );
 }
 
-export function HostGameForm({ court, onDone }) {
+// Whether "Host + book" can reserve this start time: the court takes bookings
+// and the time is one of its bookable one-hour slots.
+export function canBookWithHost(court, timeLabel) {
+  return court?.status === "Available" && BOOKING_SLOTS.includes(timeLabel);
+}
+
+export function HostGameForm({ court, onDone, onBooked }) {
   const { hostGame, busyId } = useOpenPlay();
+  const { createReservation } = useDashboard();
+  const [booking, setBooking] = useState(false);
   const days = useMemo(() => buildDayOptions(5), []);
   const [dayKey, setDayKey] = useState(days[0].key);
   const day = days.find((d) => d.key === dayKey) || days[0];
@@ -100,8 +109,32 @@ export function HostGameForm({ court, onDone }) {
   const [note, setNote] = useState("");
   const chosenTime = times.includes(time) ? time : times[0];
 
+  const bookable = canBookWithHost(court, chosenTime);
+  const post = () => hostGame({ courtId: court.id, dayKey, timeLabel: chosenTime, format, skillKey, note });
+
   const submit = async () => {
-    if (await hostGame({ courtId: court.id, dayKey, timeLabel: chosenTime, format, skillKey, note })) onDone?.();
+    if (await post()) onDone?.();
+  };
+
+  // Book first: if the slot is already taken, nothing gets posted. If the
+  // booking works but posting fails, the booking stays and the player is told.
+  const hostAndBook = async () => {
+    setBooking(true);
+    const result = await createReservation(court, dayKey, chosenTime, 1);
+    if (!result.ok) {
+      setBooking(false);
+      notify("Couldn't book this slot", `${result.message || "Try another time."} Your game wasn't posted.`, "error");
+      return;
+    }
+    onBooked?.(dayKey);
+    const posted = await post();
+    setBooking(false);
+    if (posted) {
+      notify("Game posted and slot requested", "The venue confirms bookings; we'll notify you when it's confirmed.", "success");
+      onDone?.();
+    } else {
+      notify("Slot requested, game not posted", "Your booking went through. Try posting the game again.", "error");
+    }
   };
 
   return (
@@ -126,10 +159,25 @@ export function HostGameForm({ court, onDone }) {
       </View>
       <Text style={styles.profileFieldLabel}>Note (optional)</Text>
       <TextInput value={note} onChangeText={setNote} maxLength={280} multiline placeholder="e.g. Friendly rally, bring a ball" placeholderTextColor={C.textFaint} style={[styles.profileInput, { minHeight: 64, textAlignVertical: "top" }]} accessibilityLabel="Game note" />
-      <Text style={styles.profileHint}>Hosting doesn&apos;t reserve the court. Book a slot below if this venue needs one.</Text>
+      <View style={openStyles.callout} accessibilityRole="text">
+        <Icon name="information-circle" size={18} color={C.butter} />
+        <View style={{ flex: 1 }}>
+          <Text style={openStyles.calloutTitle}>Hosting doesn&apos;t reserve the court</Text>
+          <Text style={styles.profileHint}>
+            {bookable
+              ? "Players can join your game, but the court can still be booked by others. Use “Host + book” to request this slot too."
+              : court?.status !== "Available"
+                ? "This court isn't taking bookings right now, so check with the venue before you play."
+                : `${chosenTime || "This time"} isn't one of this court's bookable slots. Pick a listed slot to book it with your game.`}
+          </Text>
+        </View>
+      </View>
+      {bookable ? (
+        <Button icon="calendar" label={`Host + book ${chosenTime}`} onPress={hostAndBook} loading={booking} disabled={!times.length || busyId === "new"} style={{ marginTop: S.xs, minHeight: 48 }} accessibilityLabel={`Post game and book ${chosenTime} on ${day.label}`} />
+      ) : null}
       <View style={{ flexDirection: "row", gap: S.sm, marginTop: S.xs }}>
-        <Button variant="ghost" label="Cancel" onPress={onDone} style={{ flex: 1 }} />
-        <Button icon="megaphone-outline" label="Post game" onPress={submit} loading={busyId === "new"} disabled={!times.length} style={{ flex: 2, minHeight: 44 }} />
+        <Button variant="ghost" label="Cancel" onPress={onDone} disabled={booking} style={{ flex: 1 }} />
+        <Button variant={bookable ? "secondary" : "primary"} icon="megaphone-outline" label={bookable ? "Host only" : "Post game"} onPress={submit} loading={busyId === "new" && !booking} disabled={!times.length || booking} style={{ flex: 2, minHeight: 44 }} />
       </View>
     </View>
   );
@@ -170,7 +218,7 @@ export function OpenPlaySection({ courts, openCourt, onFindCourt }) {
 }
 
 // Court detail: games at this court plus the host form.
-export function CourtOpenPlay({ court }) {
+export function CourtOpenPlay({ court, onBooked }) {
   const { games, loading, available } = useOpenPlay();
   const [hosting, setHosting] = useState(false);
   const here = games.filter((g) => g.court_id === court.id);
@@ -180,7 +228,7 @@ export function CourtOpenPlay({ court }) {
   return (
     <View style={{ marginTop: S.xxl }}>
       <SectionTitle action={!hosting && !closed ? "Host here" : null} onAction={() => setHosting(true)}>Open play here</SectionTitle>
-      {hosting ? <HostGameForm court={court} onDone={() => setHosting(false)} /> : null}
+      {hosting ? <HostGameForm court={court} onDone={() => setHosting(false)} onBooked={onBooked} /> : null}
       {loading ? <ActivityIndicator color={C.volt} style={{ marginTop: S.md }} /> : here.length ? (
         <View style={{ marginTop: S.md, gap: S.sm }}>
           {here.map((game) => <OpenGameCard key={game.id} game={game} showCourt={false} />)}
@@ -193,6 +241,8 @@ export function CourtOpenPlay({ court }) {
 }
 
 const openStyles = StyleSheet.create({
+  callout: { flexDirection: "row", alignItems: "flex-start", gap: S.sm, padding: S.md, borderRadius: R.md, backgroundColor: "rgba(255,239,179,0.08)", borderWidth: 1, borderColor: "rgba(255,239,179,0.35)" },
+  calloutTitle: { color: C.paper, fontSize: 14, fontWeight: "700", marginBottom: 2 },
   card: { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderRadius: R.lg, padding: S.lg },
   cardMine: { borderColor: "rgba(227,239,38,0.4)" },
   tag: { backgroundColor: C.voltSoft, borderRadius: R.pill, paddingHorizontal: 9, paddingVertical: 3 },

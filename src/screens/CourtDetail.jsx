@@ -2,33 +2,30 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { buildDayOptions, slotHasStarted, slotOverlapsBusy, useDashboard } from "../context/DashboardContext";
+import { buildDayOptions, canCancelReservation, slotHasStarted, slotOverlapsBusy, useDashboard } from "../context/DashboardContext";
 import { BackButton, Button, C, CourtArt, ErrorNote, Icon, R, S, SectionTitle, StatusPill, styles, useTopInset } from "./shared";
 import { CourtOpenPlay } from "./OpenPlay";
 import { SLOT_COLORS, SLOT_LEGEND } from "./slotColors";
 import { openDirections } from "../utils/directions";
 import { BOOKING_SLOTS, distanceFromCenterLabel, ratingLabel } from "../utils/courts";
-import { bookingPrice, findNextAvailable, peso, selectionAvailable, selectionSlots, slotStart, timeRangeLabel, toggleSlot } from "../utils/booking";
+import { bookingPrice, findNextAvailable, partitionSlots, peso, reviewBarText, selectionAvailable, selectionSlots, slotStart, timeRangeLabel, toggleSlot } from "../utils/booking";
 import { addBookingToCalendar, remindersSupported, scheduleBookingReminder, shareBooking } from "../utils/bookingActions";
-import { notify } from "../utils/confirm";
+import { confirmAction, notify } from "../utils/confirm";
+import { calendarBookingFor, canAddToCalendar } from "../utils/reservations";
+import { RESERVATION_STATUS } from "./reservationStatus";
 import { reservationTime } from "../utils/format";
 
 const SLOTS = BOOKING_SLOTS;
 const BOOKING_DAYS = 7;
-
-const RESERVATION_STATUS = {
-  pending: { label: "Pending confirmation", fg: C.butter, bg: "rgba(255,239,179,0.14)", icon: "time-outline" },
-  confirmed: { label: "Confirmed", fg: C.volt, bg: C.voltSoft, icon: "checkmark-circle" },
-  cancelled: { label: "Cancelled", fg: C.textDim, bg: "rgba(255,253,238,0.08)", icon: "close-circle-outline" },
-};
 
 function firstFree(dayDate, busy, now) {
   return SLOTS.find((s) => !slotHasStarted(dayDate, s, now) && !slotOverlapsBusy(dayDate, s, busy)) || null;
 }
 
 // Court, date, time and status for one reservation.
-export function BookingStatusCard({ reservation, courtName }) {
+export function BookingStatusCard({ reservation, courtName, onCancel, onAddToCalendar, cancelling }) {
   const status = RESERVATION_STATUS[reservation.status] || RESERVATION_STATUS.pending;
+  const actions = onCancel || onAddToCalendar;
   return (
     <View style={detailStyles.statusCard} accessibilityLabel={`${courtName}, ${reservationTime(reservation)}, ${status.label}`}>
       <View style={styles.infoIcon}><Icon name="calendar" size={16} color={C.volt} /></View>
@@ -39,6 +36,12 @@ export function BookingStatusCard({ reservation, courtName }) {
           <Icon name={status.icon} size={12} color={status.fg} />
           <Text style={[detailStyles.statusPillText, { color: status.fg }]}>{status.label}</Text>
         </View>
+        {actions ? (
+          <View style={detailStyles.cardActions}>
+            {onAddToCalendar ? <Button variant="ghost" icon="calendar-outline" label="Add to calendar" onPress={onAddToCalendar} style={detailStyles.cardActionBtn} accessibilityLabel={`Add ${courtName} booking to calendar`} /> : null}
+            {onCancel ? <Button variant="ghost" icon="close-circle-outline" label={cancelling ? "Cancelling…" : "Cancel"} onPress={onCancel} disabled={cancelling} style={detailStyles.cardActionBtn} accessibilityLabel={`Cancel ${courtName} booking`} /> : null}
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -128,7 +131,7 @@ function ConfirmBookingSheet({ court, day, selection, reserving, onConfirm, onCl
 }
 
 export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, loadBusySlots }) {
-  const { courts, reservations, hasLocation, findNearbyCourts, locationLoading, locationMessage } = useDashboard();
+  const { courts, reservations, hasLocation, findNearbyCourts, locationLoading, locationMessage, cancelReservation } = useDashboard();
   // The live copy picks up distance once location arrives, favorites, etc.
   const court = courts.find((c) => c.id === initialCourt.id) || initialCourt;
   const top = useTopInset();
@@ -148,6 +151,11 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
   // Refreshed whenever availability reloads, so slots that started while the
   // screen was open are disabled too.
   const [now, setNow] = useState(() => Date.now());
+  // Slots that already started today are collapsed unless the player asks.
+  const [startedShownFor, setStartedShownFor] = useState(null);
+  const showStarted = startedShownFor === dayKey;
+  const { upcoming: upcomingSlots, started: startedSlots } = partitionSlots(SLOTS, selectedDay.date, now);
+  const gridSlots = showStarted ? SLOTS : upcomingSlots;
   const closedForBooking = court.status === "Closed" || court.status === "Full";
   const bookingDisabled = reserving || availabilityLoading || closedForBooking;
 
@@ -218,6 +226,22 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
 
   const closeSheet = () => { setReview(null); setBookingResult(null); };
 
+  const [cancellingId, setCancellingId] = useState("");
+  const cancelBooking = async (r) => {
+    if (!(await confirmAction("Cancel booking?", `Cancel ${court.name} on ${reservationTime(r)}? The slot opens up for other players.`, "Cancel booking"))) return;
+    setCancellingId(r.id);
+    const ok = await cancelReservation(r.id);
+    setCancellingId("");
+    if (ok) setBusyRanges(await loadBusySlots(court.id, dayKey));
+  };
+
+  // After "Host + book" reserves a slot, redraw the grid if it's this day.
+  const refreshAvailability = async (bookedDayKey) => {
+    if (bookedDayKey !== dayKey) return;
+    setBusyRanges(await loadBusySlots(court.id, dayKey));
+    setSelection(null);
+  };
+
   const myUpcoming = reservations
     .filter((r) => r.court_id === court.id && r.status !== "cancelled" && new Date(r.end_time || r.start_time).getTime() > now)
     .sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
@@ -225,7 +249,6 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
   const hasCoords = Number.isFinite(court.latitude) && Number.isFinite(court.longitude);
   const knownDistance = court.dist && court.dist !== "Distance unavailable" ? court.dist : null;
   const centerDistance = knownDistance ? null : distanceFromCenterLabel(court);
-  const price = selection ? bookingPrice(court.hourlyRate, selection.hours) : null;
   const cover = court.photoUrls[0];
   const infoRows = [
     ["location-outline", "ADDRESS", court.address],
@@ -234,11 +257,15 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
     court.scheduleNote ? ["calendar-outline", "SCHEDULE", court.scheduleNote] : null,
   ].filter(Boolean);
 
-  let barLabel;
+  const reviewText = reviewBarText({
+    selection,
+    hourlyRate: court.hourlyRate,
+    dayLabel: selectedDay.label,
+    rangeLabel: selection ? timeRangeLabel(selectedDay.date, selection) : "",
+  });
+  let barLabel = reviewText.label;
   if (closedForBooking) barLabel = `Court ${court.status.toLowerCase()}`;
-  else if (dayFullyUnavailable) barLabel = "No open slots on this day";
-  else if (!selection) barLabel = "Pick a time";
-  else barLabel = `Review · ${selectedDay.label} ${timeRangeLabel(selectedDay.date, selection)}`;
+  else if (dayFullyUnavailable) barLabel = selectedDay.label === "Today" ? "No open slots today" : "No open slots on this day";
 
   return (
     <View style={{ flex: 1, backgroundColor: C.ink }}>
@@ -310,12 +337,21 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
             <View style={{ marginTop: S.xxl }}>
               <SectionTitle>Your bookings here</SectionTitle>
               <View style={{ marginTop: S.md, gap: S.sm }}>
-                {myUpcoming.map((r) => <BookingStatusCard key={r.id} reservation={r} courtName={court.name} />)}
+                {myUpcoming.map((r) => (
+                  <BookingStatusCard
+                    key={r.id}
+                    reservation={r}
+                    courtName={court.name}
+                    cancelling={cancellingId === r.id}
+                    onCancel={canCancelReservation(r, now) ? () => cancelBooking(r) : undefined}
+                    onAddToCalendar={canAddToCalendar(r, now) ? () => addBookingToCalendar(calendarBookingFor(r, court)) : undefined}
+                  />
+                ))}
               </View>
             </View>
           ) : null}
 
-          <CourtOpenPlay court={court} />
+          <CourtOpenPlay court={court} onBooked={refreshAvailability} />
 
           <View style={{ marginTop: S.xxl }}>
             <SectionTitle>Reserve a slot</SectionTitle>
@@ -351,9 +387,18 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
             ))}
           </View>
 
-          {availabilityLoading ? <ActivityIndicator color={C.volt} style={{ marginTop: S.lg }} /> : (
+          {!availabilityLoading && startedSlots.length ? (
+            <TouchableOpacity onPress={() => setStartedShownFor(showStarted ? null : dayKey)} style={detailStyles.startedToggle} accessibilityRole="button" accessibilityState={{ expanded: showStarted }} accessibilityLabel={showStarted ? "Hide slots that already started" : `Show ${startedSlots.length} slots that already started`}>
+              <Icon name={showStarted ? "chevron-up" : "time-outline"} size={15} color={C.textDim} />
+              <Text style={detailStyles.startedToggleText}>
+                {showStarted ? "Hide earlier slots" : `${startedSlots.length} earlier slot${startedSlots.length === 1 ? " has" : "s have"} started · Show`}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {availabilityLoading ? <ActivityIndicator color={C.volt} style={{ marginTop: S.lg }} /> : gridSlots.length ? (
             <View style={styles.slotGrid}>
-              {SLOTS.map((s) => {
+              {gridSlots.map((s) => {
                 const isBooked = slotOverlapsBusy(selectedDay.date, s, busyRanges);
                 const isPast = slotHasStarted(selectedDay.date, s, now);
                 const blocked = isBooked || isPast;
@@ -381,19 +426,19 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
                 );
               })}
             </View>
-          )}
+          ) : null}
 
           {dayFullyUnavailable && !closedForBooking ? (
             <View style={detailStyles.nextCard}>
               <Icon name="calendar-outline" size={18} color={C.butter} />
               <View style={{ flex: 1 }}>
-                <Text style={detailStyles.nextTitle}>No open slots {selectedDay.label === "Today" ? "left today" : `on ${selectedDay.label}`}</Text>
+                <Text style={detailStyles.nextTitle}>No open slots {selectedDay.label === "Today" ? "today" : `on ${selectedDay.label}`}</Text>
                 <Text style={styles.profileHint}>
                   {searchingNext ? "Looking for the next opening…" : nextAvailable ? `Next available: ${nextAvailable.day.label} · ${nextAvailable.label}` : "Nothing open in the next week. Try open play instead."}
                 </Text>
               </View>
               {nextAvailable ? (
-                <Button variant="secondary" label="Jump" icon="arrow-forward" onPress={jumpToNext} style={{ minHeight: 44 }} accessibilityLabel={`Jump to ${nextAvailable.day.label} at ${nextAvailable.label}`} />
+                <Button variant="secondary" label={nextAvailable.day.label === "Tomorrow" ? "Tomorrow" : "Next day"} icon="arrow-forward" onPress={jumpToNext} style={{ minHeight: 44 }} accessibilityLabel={`Jump to ${nextAvailable.day.label} at ${nextAvailable.label}`} />
               ) : searchingNext ? <ActivityIndicator color={C.volt} /> : null}
             </View>
           ) : null}
@@ -408,8 +453,8 @@ export function CourtDetail({ court: initialCourt, onBack, reserve, reserving, l
       </ScrollView>
 
       <SafeAreaView edges={["bottom"]} style={styles.bookingBar}>
-        {selection && price && !dayFullyUnavailable && !closedForBooking ? (
-          <Text style={detailStyles.barPrice}>{selection.hours} hr{selection.hours === 1 ? "" : "s"} · {peso(price.total)} total</Text>
+        {reviewText.summary && !dayFullyUnavailable && !closedForBooking ? (
+          <Text style={detailStyles.barPrice} accessibilityLiveRegion="polite">{reviewText.summary}</Text>
         ) : null}
         <Button
           icon="calendar"
@@ -436,6 +481,10 @@ const detailStyles = StyleSheet.create({
   slotSub: { fontSize: 11, fontWeight: "700", marginTop: 2 },
   nextCard: { flexDirection: "row", alignItems: "center", gap: S.md, marginTop: S.md, padding: S.md, borderRadius: R.md, backgroundColor: "rgba(255,239,179,0.08)", borderWidth: 1, borderColor: "rgba(255,239,179,0.25)" },
   nextTitle: { color: C.paper, fontSize: 14, fontWeight: "700" },
+  cardActions: { flexDirection: "row", flexWrap: "wrap", gap: S.sm, marginTop: S.sm },
+  cardActionBtn: { minHeight: 40, paddingHorizontal: S.md },
+  startedToggle: { flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", minHeight: 44, marginTop: S.sm },
+  startedToggleText: { color: C.textDim, fontSize: 13, fontWeight: "600" },
   barPrice: { color: C.mist, fontSize: 13, fontWeight: "700", textAlign: "center", marginBottom: S.sm },
   statusCard: { flexDirection: "row", alignItems: "flex-start", backgroundColor: C.surface, borderWidth: 1, borderColor: C.line, borderRadius: R.md, padding: S.md },
   statusCourt: { color: C.paper, fontSize: 15, fontWeight: "700" },

@@ -116,15 +116,23 @@ it("History: disputes a match another player recorded", async () => {
   expect(calls).toContainEqual(["rpc", "respond_match_confirmation", { p_record_id: "m1", p_confirm: false }]);
 }, 60000);
 
-it("Admin: confirms a reservation (with notification), deletes a court and a reported post", async () => {
+it("Admin: confirms a reservation, deletes a court and a reported post", async () => {
   const tree = await render(<AdminTab user={{ id: "u1" }} onBack={jest.fn()} />);
   await press(tree, "Confirm");
   expect(calls).toContainEqual(["reservations", "update", { status: "confirmed" }]);
-  expect(calls.find((c) => c[0] === "notifications" && c[1] === "insert")[2]).toMatchObject({ recipient_id: "u1", kind: "reservation", title: "Reservation confirmed" });
+  // The player is notified by a database trigger, not a second client insert.
+  expect(calls.find((c) => c[0] === "notifications" && c[1] === "insert")).toBeUndefined();
   await press(tree, "Delete Magugpo");
   expect(calls).toContainEqual(["courts", "delete", undefined]);
   await press(tree, "Delete this reported post");
   expect(calls).toContainEqual(["community_posts", "delete", undefined]);
+}, 60000);
+
+it("Admin: declines a pending booking", async () => {
+  const tree = await render(<AdminTab user={{ id: "u1" }} onBack={jest.fn()} />);
+  const decline = tree.root.findAll((n) => /^Decline .*booking$/.test(n.props.accessibilityLabel || "") && typeof n.props.onPress === "function")[0];
+  await act(async () => { await decline.props.onPress(); });
+  expect(calls).toContainEqual(["reservations", "update", { status: "declined" }]);
 }, 60000);
 
 it("Notifications: marks all read", async () => {

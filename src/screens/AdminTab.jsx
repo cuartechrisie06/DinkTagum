@@ -5,6 +5,7 @@ import { useDashboard } from "../context/DashboardContext";
 import { useAuth } from "../context/AuthContext";
 import { confirmAction, notify } from "../utils/confirm";
 import { reservationTime } from "../utils/format";
+import { adminActionsFor } from "../utils/reservations";
 import { Button, C, EmptyCard, ErrorNote, OverlayHeader, S, SectionTitle, styles } from "./shared";
 import { COURT_COLUMNS, courtFormToRow, courtToForm, emptyCourt } from "./admin/courtRules";
 import { CourtForm } from "./admin/CourtForm";
@@ -124,12 +125,16 @@ export function AdminTab({ user, onBack }) {
     const { data, error: reqError } = await request;
     setSavingId("");
     if (reqError) {
-      const inUse = /foreign key|23503|violates/i.test(reqError.message);
+      const inUse = reqError.code === "23503" || /foreign key/i.test(reqError.message);
+      // "declined" needs the reservation status migration.
+      const statusUnsupported = /reservations_status_check/i.test(reqError.message);
       notify(
         failTitle,
         inUse
           ? "This court still has reservations. Close it instead, or remove its reservations first."
-          : reqError.message,
+          : statusUnsupported
+            ? "Declining needs the latest database migration (20261009000000_reservation_status_flow). Cancel the booking instead for now."
+            : reqError.message,
       );
       return false;
     }
@@ -212,42 +217,27 @@ export function AdminTab({ user, onBack }) {
 
   // ── Reservations ─────────────────────────────────────────────────────────────
 
+  // The player is notified of every status change by the database trigger
+  // private.notify_reservation_status (see the reservation status migration),
+  // so nothing is inserted from here; that also keeps one notification per change.
   const setReservationStatus = async (r, status) => {
-    if (
-      status === "cancelled" &&
-      !(await confirmAction(
-        "Cancel reservation?",
-        `Cancel ${namesById[r.user_id] || "this player"}'s booking at ${r.courts?.name || "this court"}?`,
-        "Cancel reservation",
-      ))
-    )
-      return;
+    const player = namesById[r.user_id] || "this player";
+    const where = r.courts?.name || "this court";
+    if (status === "cancelled" && !(await confirmAction("Cancel reservation?", `Cancel ${player}'s booking at ${where}?`, "Cancel reservation"))) return;
+    if (status === "declined" && !(await confirmAction("Decline booking?", `Decline ${player}'s request for ${where}? The slot opens up and they'll be notified.`, "Decline"))) return;
 
-    const ok = await mutate(
+    await mutate(
       r.id,
       supabase.from("reservations").update({ status }).eq("id", r.id),
       () => {
         setReservations((items) =>
-          status === "cancelled"
+          status === "cancelled" || status === "declined"
             ? items.filter((item) => item.id !== r.id)
-            : items.map((item) =>
-                item.id === r.id ? { ...item, status } : item,
-              ),
+            : items.map((item) => (item.id === r.id ? { ...item, status } : item)),
         );
       },
+      status === "declined" ? "Could not decline booking" : "Could not update reservation",
     );
-
-    if (!ok) return;
-    const title =
-      status === "confirmed" ? "Reservation confirmed" : "Reservation cancelled";
-    const { error: notifyError } = await supabase.from("notifications").insert({
-      recipient_id: r.user_id,
-      kind: "reservation",
-      title,
-      body: `${r.courts?.name || "Your court"} · ${reservationTime(r)}`,
-      related_id: r.id,
-    });
-    if (notifyError) console.warn("Could not notify player:", notifyError.message);
   };
 
   // ── Reported posts ───────────────────────────────────────────────────────────
@@ -431,7 +421,7 @@ export function AdminTab({ user, onBack }) {
                     </Text>
                   }
                 >
-                  {r.status === "pending" ? (
+                  {adminActionsFor(r).includes("confirm") ? (
                     <Button
                       variant="secondary"
                       icon="checkmark"
@@ -441,13 +431,26 @@ export function AdminTab({ user, onBack }) {
                       style={small}
                     />
                   ) : null}
-                  <Button
-                    variant="ghost"
-                    label="Cancel"
-                    onPress={() => setReservationStatus(r, "cancelled")}
-                    disabled={savingId === r.id}
-                    style={small}
-                  />
+                  {adminActionsFor(r).includes("decline") ? (
+                    <Button
+                      variant="ghost"
+                      icon="close"
+                      label="Decline"
+                      onPress={() => setReservationStatus(r, "declined")}
+                      disabled={savingId === r.id}
+                      style={small}
+                      accessibilityLabel={`Decline ${namesById[r.user_id] || "player"}'s booking`}
+                    />
+                  ) : null}
+                  {adminActionsFor(r).includes("cancel") ? (
+                    <Button
+                      variant="ghost"
+                      label="Cancel"
+                      onPress={() => setReservationStatus(r, "cancelled")}
+                      disabled={savingId === r.id}
+                      style={small}
+                    />
+                  ) : null}
                 </AdminRow>
               ))
             ) : (

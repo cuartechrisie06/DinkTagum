@@ -5,6 +5,9 @@ import { useAuth } from "../context/AuthContext";
 import { canCancelReservation, useDashboard } from "../context/DashboardContext";
 import { canEditRecord, confirmationBadge, gameRecordFieldErrors, useGameRecords } from "../context/GameRecordsContext";
 import { confirmAction } from "../utils/confirm";
+import { addBookingToCalendar } from "../utils/bookingActions";
+import { calendarBookingFor, canAddToCalendar, reservationBadgeKey } from "../utils/reservations";
+import { RESERVATION_STATUS } from "./reservationStatus";
 import { initialsFor, reservationTime } from "../utils/format";
 import { Avatar, Button, C, EmptyCard, ErrorNote, FieldError, HeaderBar, Icon, R, S, ScreenFrame, styles } from "./shared";
 import { useGoTab } from "./HomeScreen";
@@ -250,12 +253,6 @@ function MatchesPanel() {
   );
 }
 
-const RESERVATION_STATUS = {
-  pending: { label: "Pending", fg: C.butter, bg: "rgba(255,239,179,0.14)" },
-  confirmed: { label: "Confirmed", fg: C.volt, bg: C.voltSoft },
-  cancelled: { label: "Cancelled", fg: C.textDim, bg: "rgba(255,253,238,0.08)" },
-};
-
 function ReservationsPanel() {
   const { reservations, dashboardLoading, cancelReservation, deleteReservation } = useDashboard();
   const goTab = useGoTab();
@@ -285,9 +282,8 @@ function ReservationsPanel() {
   );
 
   return reservations.map((r) => {
-    const status = RESERVATION_STATUS[r.status] || RESERVATION_STATUS.pending;
+    const status = RESERVATION_STATUS[reservationBadgeKey(r, now)];
     const cancellable = canCancelReservation(r, now);
-    const past = new Date(r.start_time).getTime() < now;
     return (
       <View key={r.id} style={[styles.matchRow, { alignItems: "flex-start" }]}>
         <View style={[styles.infoIcon, { marginTop: 2 }]}><Icon name="calendar" size={16} color={C.volt} /></View>
@@ -295,8 +291,15 @@ function ReservationsPanel() {
           <Text style={styles.matchVs} numberOfLines={1}>{r.court?.name || "Court no longer listed"}</Text>
           <Text style={styles.playerSub}>{reservationTime(r)}</Text>
           <View style={{ flexDirection: "row", alignItems: "center", marginTop: S.sm, gap: S.sm }}>
-            <View style={[historyStyles.status, { backgroundColor: status.bg }]}><Text style={[historyStyles.statusText, { color: status.fg }]}>{past && r.status !== "cancelled" ? "Past" : status.label}</Text></View>
+            <View style={[historyStyles.status, { backgroundColor: status.bg }]}><Text style={[historyStyles.statusText, { color: status.fg }]}>{status.short}</Text></View>
+            {canAddToCalendar(r, now) ? (
+              <TouchableOpacity onPress={() => addBookingToCalendar(calendarBookingFor(r, r.court))} style={historyStyles.calendarLink} accessibilityRole="button" accessibilityLabel={`Add ${r.court?.name || "this booking"} to your calendar`} hitSlop={6}>
+                <Icon name="calendar-outline" size={14} color={C.volt} />
+                <Text style={historyStyles.calendarLinkText}>Add to calendar</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
+          {r.status === "declined" ? <Text style={[styles.profileHint, { marginTop: 4 }]}>The venue couldn&apos;t take this booking. Try another time.</Text> : null}
         </View>
         {cancellable ? (
           <Button variant="ghost" label={busyId === r.id ? "…" : "Cancel"} onPress={() => cancel(r)} disabled={busyId === r.id} style={{ minHeight: 34, paddingHorizontal: S.md }} accessibilityLabel={`Cancel reservation at ${r.court?.name || "court"}`} />
@@ -364,6 +367,8 @@ const historyStyles = StyleSheet.create({
   rowAction: { padding: 6, marginLeft: 2 },
   status: { borderRadius: R.pill, paddingHorizontal: 9, paddingVertical: 3 },
   statusText: { fontSize: 11.5, fontWeight: "700" },
+  calendarLink: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 32 },
+  calendarLinkText: { color: C.volt, fontSize: 12.5, fontWeight: "700" },
   panelLabel: { color: C.butter, fontSize: 11.5, fontWeight: "800", letterSpacing: 1, marginBottom: S.sm },
   pendingCard: { backgroundColor: C.surface2, borderWidth: 1, borderColor: "rgba(255,239,179,0.35)", borderRadius: R.lg, padding: S.lg, marginBottom: S.sm },
   confirmTag: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 },

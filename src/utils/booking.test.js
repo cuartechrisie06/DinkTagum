@@ -1,4 +1,4 @@
-import { bookingPrice, findNextAvailable, googleCalendarUrl, reminderTime, selectionAvailable, selectionSlots, timeRangeLabel, toggleSlot } from "./booking";
+import { bookingPrice, findNextAvailable, googleCalendarUrl, partitionSlots, reminderTime, reviewBarText, selectionAvailable, selectionSlots, timeRangeLabel, toggleSlot } from "./booking";
 
 const day = new Date(2026, 9, 7);
 day.setHours(0, 0, 0, 0);
@@ -63,5 +63,37 @@ describe("follow-ups", () => {
     expect(reminderTime(start, new Date(2026, 9, 7, 12).getTime()).getHours()).toBe(15);
     expect(reminderTime(start, new Date(2026, 9, 7, 15, 30).getTime()).getMinutes()).toBe(45);
     expect(reminderTime(start, new Date(2026, 9, 7, 15, 50).getTime())).toBeNull();
+  });
+});
+
+describe("partitionSlots", () => {
+  const slots = ["6:00 AM", "7:00 AM", "3:00 PM", "4:00 PM"];
+
+  it("moves slots that already started today out of the grid", () => {
+    const afternoon = new Date(2026, 9, 7, 15, 30).getTime();
+    expect(partitionSlots(slots, day, afternoon)).toEqual({ upcoming: ["4:00 PM"], started: ["6:00 AM", "7:00 AM", "3:00 PM"] });
+  });
+
+  it("leaves future days untouched", () => {
+    const tomorrow = new Date(2026, 9, 8);
+    expect(partitionSlots(slots, tomorrow, morning)).toEqual({ upcoming: slots, started: [] });
+  });
+
+  it("reports nothing left once the last slot has started", () => {
+    const night = new Date(2026, 9, 7, 23, 0).getTime();
+    expect(partitionSlots(slots, day, night).upcoming).toEqual([]);
+  });
+});
+
+describe("reviewBarText", () => {
+  it("shows the per-slot price and the running total", () => {
+    const text = reviewBarText({ selection: { start: "4:00 PM", hours: 2 }, hourlyRate: 150, dayLabel: "Today", rangeLabel: "4:00 – 6:00 PM" });
+    expect(text.summary).toMatch(/₱150 per slot × 2/);
+    expect(text.label).toBe("Review · ₱300 total");
+  });
+
+  it("handles courts without a listed price and an empty selection", () => {
+    expect(reviewBarText({ selection: { start: "4:00 PM", hours: 1 }, hourlyRate: null, dayLabel: "Today", rangeLabel: "4–5 PM" }).summary).toMatch(/pay at the venue/);
+    expect(reviewBarText({ selection: null, hourlyRate: 150 })).toEqual({ summary: null, label: "Pick a time" });
   });
 });

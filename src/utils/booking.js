@@ -56,6 +56,29 @@ export function timeRangeLabel(dayDate, selection) {
   return `${fmt(start)} – ${fmt(end)}`;
 }
 
+// Splits a day's slots into ones still bookable by time and ones that have
+// already started (only ever non-empty for today). The court page hides the
+// started ones behind a "Show earlier" toggle.
+export function partitionSlots(slots, dayDate, now = Date.now()) {
+  const upcoming = [];
+  const started = [];
+  for (const label of slots) (slotHasStarted(dayDate, label, now) ? started : upcoming).push(label);
+  return { upcoming, started };
+}
+
+// Text for the sticky Review bar: the per-slot price and the running total
+// for the current selection. `rangeLabel` is e.g. "4:00 – 6:00 PM".
+export function reviewBarText({ selection, hourlyRate, dayLabel, rangeLabel }) {
+  if (!selection) return { summary: null, label: "Pick a time" };
+  const hours = `${selection.hours} slot${selection.hours === 1 ? "" : "s"}`;
+  const price = bookingPrice(hourlyRate, selection.hours);
+  if (!price) return { summary: `${dayLabel} ${rangeLabel} · ${hours} · pay at the venue`, label: "Review booking" };
+  return {
+    summary: `${dayLabel} ${rangeLabel} · ${peso(price.perHour)} per slot × ${selection.hours}`,
+    label: `Review · ${peso(price.total)} total`,
+  };
+}
+
 export function bookingPrice(hourlyRate, hours) {
   if (hourlyRate === null || hourlyRate === undefined || !Number.isFinite(Number(hourlyRate))) return null;
   return { perHour: Number(hourlyRate), hours, total: Number(hourlyRate) * hours };
