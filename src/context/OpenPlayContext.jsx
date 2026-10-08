@@ -121,6 +121,11 @@ export function OpenPlayProvider({ children }) {
   return <OpenPlayContext.Provider value={value}>{children}</OpenPlayContext.Provider>;
 }
 
+// For screens that also render outside the provider (e.g. in tests).
+export function useOpenPlayOptional() {
+  return useContext(OpenPlayContext);
+}
+
 export function useOpenPlay() {
   const value = useContext(OpenPlayContext);
   if (!value) throw new Error("useOpenPlay must be used within OpenPlayProvider");

@@ -2,9 +2,12 @@ import React, { useEffect, useState } from "react";
 import { ActivityIndicator, SectionList, Text, TouchableOpacity, View } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { groupByRecency, relativeTime } from "../utils/format";
-import { C, EmptyCard, ErrorNote, Icon, IconBtn, OverlayHeader, S, styles } from "./shared";
+import { Button, C, EmptyCard, ErrorNote, Icon, OverlayHeader, S, styles } from "./shared";
 import { notify } from "../utils/confirm";
-import { dedupeNotifications } from "../utils/notifications";
+import { dedupeNotifications, groupByType, notificationTarget } from "../utils/notifications";
+import { useDashboard } from "../context/DashboardContext";
+import { useOpenPlayOptional } from "../context/OpenPlayContext";
+import { useOverlayNav } from "../context/OverlayNavContext";
 
 // Shared with the in-app banner (AppOverlays) so both route the same way.
 export const KIND_ICONS = { message: "chatbubble-ellipses", reservation: "calendar", game_invitation: "tennisball", community: "people", system: "information-circle", connection: "person-add", open_play: "people-circle", match: "shield-checkmark" };
@@ -55,6 +58,11 @@ export function NotificationCenter({ user, onBack, onOpenConversation, onNavigat
 
   // Identical repeats (e.g. old "Reservation received" rows) show once.
   const visible = dedupeNotifications(notifications);
+  const [view, setView] = useState("recent");
+  const { reservations, courts } = useDashboard();
+  const openPlay = useOpenPlayOptional();
+  const { setDetail, setNotificationView } = useOverlayNav();
+  const courtsById = Object.fromEntries(courts.map((c) => [c.id, c]));
 
   const markRead = async (notification) => {
     if (notification.is_read || !supabase) return;
@@ -72,14 +80,18 @@ export function NotificationCenter({ user, onBack, onOpenConversation, onNavigat
     setNotifications((current) => current.map((item) => ({ ...item, is_read: true })));
   };
 
+  // Deep link: the conversation, the court page for a booking / open game,
+  // or the tab that holds the item.
   const openNotification = (notification) => {
     markRead(notification);
-    if (notification.kind === "message") {
-      if (onOpenConversation) {
-        onOpenConversation(notification.related_id);
-      }
+    const target = notificationTarget(notification, { reservations, games: openPlay?.games || [], courtsById });
+    if (target.type === "chat") {
+      onOpenConversation?.(target.id);
+    } else if (target.type === "court") {
+      setNotificationView(false);
+      setDetail(target.court);
     } else if (onNavigate) {
-      onNavigate(notificationRoute(notification.kind));
+      onNavigate(target.path);
     } else {
       onBack?.();
     }
@@ -91,12 +103,19 @@ export function NotificationCenter({ user, onBack, onOpenConversation, onNavigat
       title="Notifications"
       subtitle={unreadCount ? `${unreadCount} unread` : "Updates about your games and reservations"}
       onBack={onBack}
-      right={unreadCount ? <IconBtn name="checkmark-done" variant="ghost" onPress={markAllRead} accessibilityLabel="Mark all read" /> : null}
+      right={unreadCount ? <Button variant="ghost" icon="checkmark-done" label="Mark all read" onPress={markAllRead} style={{ minHeight: 40, paddingHorizontal: S.md }} accessibilityLabel="Mark all read" /> : null}
     />
+    <View style={[styles.choiceRow, { paddingHorizontal: S.xl, paddingTop: S.md }]} accessibilityRole="tablist">
+      {[["recent", "Recent"], ["type", "By type"]].map(([key, label]) => (
+        <TouchableOpacity key={key} onPress={() => setView(key)} style={[styles.chip, { marginRight: 0, minHeight: 40, justifyContent: "center" }, view === key && styles.chipActive]} accessibilityRole="tab" accessibilityState={{ selected: view === key }} accessibilityLabel={`Show notifications ${label.toLowerCase()}`}>
+          <Text style={[styles.chipText, view === key && styles.chipTextActive]}>{label}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
     <SectionList
       style={styles.screen}
       contentContainerStyle={{ padding: S.xl, paddingTop: S.sm, paddingBottom: 32 }}
-      sections={loading ? [] : groupByRecency(visible)}
+      sections={loading ? [] : view === "type" ? groupByType(visible) : groupByRecency(visible)}
       keyExtractor={(notification) => notification.id}
       stickySectionHeadersEnabled={false}
       renderSectionHeader={({ section }) => (

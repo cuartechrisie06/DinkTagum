@@ -198,3 +198,19 @@ export function ratingLabel(court) {
   const rating = Number(court.rating || 0);
   return rating > 0 ? rating.toFixed(1) : "New";
 }
+
+// Courts worth suggesting when a player has nothing booked: ones with a free
+// slot today first (soonest first), then tomorrow, nearest breaking ties.
+export function suggestCourts(courts, limit = 3) {
+  return sortCourts(courts.filter((c) => c.status === "Available" && c.nextSlot), "available")
+    .sort((a, b) => Number(Boolean(b.nextSlot?.today)) - Number(Boolean(a.nextSlot?.today)) || (a.nextSlot?.order ?? 0) - (b.nextSlot?.order ?? 0) || nullsLast(distanceKm(a)) - nullsLast(distanceKm(b)))
+    .slice(0, limit);
+}
+
+// "Free 4:00 PM · ₱150/hr" for a suggestion row.
+export function suggestionLabel(court) {
+  const slot = court.nextSlot ? `Free ${court.nextSlot.label}` : "Check availability";
+  const price = court.hourlyRate !== null && court.hourlyRate !== undefined ? ` · ₱${Number(court.hourlyRate)}/hr` : "";
+  const dist = distanceKm(court) !== null ? ` · ${distanceKm(court)} km` : "";
+  return `${slot}${price}${dist}`;
+}

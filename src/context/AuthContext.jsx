@@ -10,7 +10,8 @@ const AuthContext = createContext(null);
 // access/refresh tokens in the URL's hash fragment. Web has detectSessionInUrl
 // for this already (see lib/supabase.js); native has no window.location, so
 // the same redirect arrives here as a deep link and is parsed by hand.
-async function consumeAuthRedirectUrl(url) {
+// Also used for the Google sign-in redirect (utils/socialAuth.js).
+export async function consumeAuthRedirectUrl(url) {
   if (!supabase || !url) return;
   const parsed = Linking.parse(url);
   const fragment = url.includes("#") ? url.slice(url.indexOf("#") + 1) : "";

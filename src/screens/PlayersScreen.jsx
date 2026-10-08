@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, FlatList, RefreshControl, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../context/AuthContext";
+import { useDashboard } from "../context/DashboardContext";
+import { useGameRecords } from "../context/GameRecordsContext";
 import { useOverlayNav } from "../context/OverlayNavContext";
+import { connectionLabel, DISTANCE_FILTERS, filterByDistance, playerDistanceKm, recentOpponents } from "../utils/players";
 import { initialsFor } from "../utils/format";
 import { Avatar, Button, C, ChipScroller, EmptyCard, ErrorNote, HeaderBar, Icon, IconBtn, S, ScreenFrame, styles } from "./shared";
 import { notify } from "../utils/confirm";
@@ -39,20 +42,28 @@ export function directorySummary({ loading, visible, loaded, filtersActive }) {
   return `${plural(visible.length)} in Tagum City`;
 }
 
-function connectionLabel(state) {
-  if (!state) return "Connect";
-  if (state.status === "accepted") return "Connected";
-  return state.requesterIsMe ? "Requested" : "Accept";
-}
-
 function connectionIcon(state) {
   if (!state) return "person-add-outline";
   if (state.status === "accepted") return "people";
-  return state.requesterIsMe ? "checkmark" : "checkmark-circle";
+  return state.requesterIsMe ? "time-outline" : "checkmark-circle";
+}
+
+function formatPlayedOn(day) {
+  return new Date(`${day}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function PlayersTab({ user }) {
   const { setChatView } = useOverlayNav();
+  const { courts, userLocation, homeCourtId } = useDashboard();
+  const { records } = useGameRecords();
+  const [distance, setDistance] = useState("any");
+  // profiles.home_court_id comes from the home court migration.
+  const [homeCourtsSupported, setHomeCourtsSupported] = useState(true);
+  const courtsById = useMemo(() => Object.fromEntries(courts.map((c) => [c.id, c])), [courts]);
+  // Distance is measured from my location, else my home court.
+  const myHomeCourt = homeCourtId ? courtsById[homeCourtId] : null;
+  const origin = userLocation || (myHomeCourt && Number.isFinite(myHomeCourt.latitude) ? { latitude: myHomeCourt.latitude, longitude: myHomeCourt.longitude } : null);
+  const recent = recentOpponents(records);
   const [connections, setConnections] = useState({});
   const [connectingFor, setConnectingFor] = useState("");
   const [invitingFor, setInvitingFor] = useState("");
@@ -125,10 +136,17 @@ function PlayersTab({ user }) {
       .neq("id", user?.id || "")
       .order("display_name", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
-    let { data, error: directoryError } = await query(availabilitySupported ? `${BASE_COLUMNS}, availability` : BASE_COLUMNS);
-    if (directoryError && availabilitySupported && (directoryError.code === "42703" || /availability/.test(directoryError.message))) {
-      setAvailabilitySupported(false);
-      ({ data, error: directoryError } = await query(BASE_COLUMNS));
+    // Optional columns from later migrations; each is dropped if the database
+    // doesn't have it yet.
+    let withAvailability = availabilitySupported;
+    let withHomeCourt = homeCourtsSupported;
+    const columns = () => [BASE_COLUMNS, withAvailability && "availability", withHomeCourt && "home_court_id"].filter(Boolean).join(", ");
+    let { data, error: directoryError } = await query(columns());
+    while (directoryError && (directoryError.code === "42703" || /column .* does not exist/i.test(directoryError.message || ""))) {
+      if (withHomeCourt && /home_court_id/.test(directoryError.message)) { withHomeCourt = false; setHomeCourtsSupported(false); }
+      else if (withAvailability && /availability/.test(directoryError.message)) { withAvailability = false; setAvailabilitySupported(false); }
+      else break;
+      ({ data, error: directoryError } = await query(columns()));
     }
     if (directoryError) { setError(`Player directory could not be loaded: ${directoryError.message}`); return; }
     setPlayers((current) => (page === 0 ? data || [] : [...current, ...(data || [])]));
@@ -161,8 +179,9 @@ function PlayersTab({ user }) {
     setLoadingMore(false);
   };
 
-  const visiblePlayers = filterPlayers(players, { query, gameType, skill, times });
-  const filtersActive = Boolean(query.trim() || gameType !== "All" || skill !== "any" || times.length);
+  const distanceKm = DISTANCE_FILTERS.find((d) => d.key === distance)?.km ?? null;
+  const visiblePlayers = filterByDistance(filterPlayers(players, { query, gameType, skill, times }), { km: distanceKm, origin, courtsById });
+  const filtersActive = Boolean(query.trim() || gameType !== "All" || skill !== "any" || times.length || distanceKm !== null);
   // The one array both the list and the header count read from.
   const listData = loading ? [] : visiblePlayers;
   const toggleTime = (t) => setTimes((current) => (current.includes(t) ? current.filter((x) => x !== t) : [...current, t]));
@@ -191,7 +210,10 @@ function PlayersTab({ user }) {
                   <Text style={styles.playerName} numberOfLines={1}>{p.display_name}</Text>
                   <View style={{ flexDirection: "row", alignItems: "center", marginTop: 3 }}>
                     <Icon name="location-outline" size={13} color={C.textDim} />
-                    <Text style={[styles.playerSub, { marginTop: 0, marginLeft: 3 }]} numberOfLines={1}>{p.location || "Tagum City"} · {p.preferred_game_type || "Doubles"}</Text>
+                    <Text style={[styles.playerSub, { marginTop: 0, marginLeft: 3 }]} numberOfLines={1}>
+                      {p.location || "Tagum City"} · {p.preferred_game_type || "Doubles"}
+                      {playerDistanceKm(p, origin, courtsById) !== null ? ` · ${playerDistanceKm(p, origin, courtsById).toFixed(1)} km` : ""}
+                    </Text>
                   </View>
                   {p.availability?.length ? <Text style={[styles.playerSub, { color: C.mist }]} numberOfLines={1}>Plays {p.availability.join(", ").toLowerCase()}</Text> : null}
                 </View>
@@ -212,9 +234,9 @@ function PlayersTab({ user }) {
                   icon={connectionIcon(connectionState)}
                   label={connectingFor === p.id ? "…" : connectionLabel(connectionState)}
                   onPress={() => requestConnection(p)}
-                  disabled={connectingFor === p.id || connectionState?.status === "accepted"}
+                  disabled={connectingFor === p.id || connectionState?.status === "accepted" || Boolean(connectionState?.requesterIsMe)}
                   style={{ flex: 1 }}
-                  accessibilityLabel={connectionState?.status === "accepted" ? `Connected with ${p.display_name}` : connectionState?.requesterIsMe ? `Connection request sent to ${p.display_name}` : `Connect with ${p.display_name}`}
+                  accessibilityLabel={connectionState?.status === "accepted" ? `Connected with ${p.display_name}` : connectionState?.requesterIsMe ? `Connection request to ${p.display_name} pending` : `Connect with ${p.display_name}`}
                 />
                 <IconBtn
                   name="tennisball-outline"
@@ -253,13 +275,41 @@ function PlayersTab({ user }) {
               </ChipScroller>
             </>
           ) : null}
+          {homeCourtsSupported ? (
+            <>
+              <Text style={playerFilterLabel}>Distance</Text>
+              <ChipScroller>
+                {DISTANCE_FILTERS.map((d) => chip(d.key, d.label, distance === d.key, () => setDistance(d.key)))}
+              </ChipScroller>
+              {distanceKm !== null && !origin ? (
+                <Text style={[styles.profileHint, { marginHorizontal: S.xl, marginTop: 4 }]}>Set your home court on Profile or allow location on Courts to filter by distance.</Text>
+              ) : distanceKm !== null ? (
+                <Text style={[styles.profileHint, { marginHorizontal: S.xl, marginTop: 4 }]}>Measured to each player&apos;s home court. Players without one are hidden.</Text>
+              ) : null}
+            </>
+          ) : null}
+          {recent.length ? (
+            <View style={{ paddingHorizontal: S.xl, marginTop: S.lg }}>
+              <Text style={[playerFilterLabel, { marginHorizontal: 0 }]}>Recently played with</Text>
+              {recent.map((r) => (
+                <TouchableOpacity key={r.id} onPress={() => openChatWith({ id: r.id, display_name: r.name })} style={recentStyles.row} accessibilityRole="button" accessibilityLabel={`Message ${r.name}, last played ${formatPlayedOn(r.lastPlayed)}`}>
+                  <Avatar initials={initialsFor(r.name)} size={36} />
+                  <View style={{ flex: 1, marginLeft: S.md }}>
+                    <Text style={styles.playerName} numberOfLines={1}>{r.name}</Text>
+                    <Text style={styles.playerSub}>{r.result === "win" ? "You won" : "You lost"} · {formatPlayedOn(r.lastPlayed)}</Text>
+                  </View>
+                  <Icon name="chatbubble-outline" size={18} color={C.volt} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
           <View style={{ height: S.lg }} />
         </>
       }
       ListEmptyComponent={
         <View style={{ paddingHorizontal: S.xl }}>
           {loading ? <ActivityIndicator color={C.volt} /> : <EmptyCard icon="people-outline" title="No players found" message={filtersActive ? "Try a different name or filter." : "Players who join the directory will show up here."}>
-            {filtersActive ? <Button label="Clear filters" icon="refresh" onPress={() => { setQuery(""); setGameType("All"); setSkill("any"); setTimes([]); }} style={{ marginTop: S.lg, minHeight: 44 }} /> : null}
+            {filtersActive ? <Button label="Clear filters" icon="refresh" onPress={() => { setQuery(""); setGameType("All"); setSkill("any"); setTimes([]); setDistance("any"); }} style={{ marginTop: S.lg, minHeight: 44 }} /> : null}
           </EmptyCard>}
         </View>
       }
@@ -281,5 +331,7 @@ export function DirectoryScreen() {
   const { session } = useAuth();
   return <ScreenFrame><PlayersTab user={session.user} /></ScreenFrame>;
 }
+
+const recentStyles = { row: { flexDirection: "row", alignItems: "center", minHeight: 52, paddingVertical: S.xs } };
 
 const playerFilterLabel = { color: C.mist, fontSize: 12.5, fontWeight: "800", letterSpacing: 0.3, marginTop: S.md, marginBottom: 6, marginHorizontal: S.xl };

@@ -6,6 +6,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { isSupabaseConfigured, supabase } from "../../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { Button, C, Icon, R, S, ScreenFrame, styles, useTopInset } from "./shared";
+import { consumeFreshSignIn, markFreshSignIn } from "../utils/biometric";
+import { googleSignInEnabled, signInWithGoogle } from "../utils/socialAuth";
 
 const PASSWORD_HINT = "8+ characters, mixed case + a number";
 // Brighter than C.textFaint so placeholder text stays readable on the dark fields.
@@ -148,12 +150,16 @@ export function AuthScreen() {
     setLoading(true);
     const requestId = Symbol("auth-request");
     activeRequestRef.current = requestId;
+    // The session arrives (and the app mounts) before this await returns, so
+    // flag the fresh sign-in first; undone below if it fails.
+    markFreshSignIn();
     try {
       const request = registering
         ? supabase.auth.signUp({ email: loginEmail, password, options: { data: { display_name: displayName.trim() } } })
         : supabase.auth.signInWithPassword({ email: loginEmail, password });
       const { data, error } = await request;
       if (activeRequestRef.current !== requestId) return undefined;
+      if (error || !data?.session) consumeFreshSignIn();
       if (error) {
         // Wrong credentials belong next to the password field.
         if (/invalid login credentials/i.test(error.message)) setErrors({ password: "Email or password is incorrect." });
@@ -167,12 +173,24 @@ export function AuthScreen() {
         setNotice("Account created. Opening your dashboard…");
       }
     } catch (error) {
+      consumeFreshSignIn();
       if (activeRequestRef.current !== requestId) return undefined;
       setNotice(error?.message || "Something went wrong. Please try again.");
     } finally {
       if (activeRequestRef.current === requestId) setLoading(false);
     }
     return undefined;
+  };
+
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const google = async () => {
+    setNotice("");
+    setGoogleLoading(true);
+    markFreshSignIn();
+    const result = await signInWithGoogle();
+    setGoogleLoading(false);
+    if (!result.ok) consumeFreshSignIn();
+    if (result.error) setNotice(result.error);
   };
 
   const submitResetRequest = async () => {
@@ -231,6 +249,16 @@ export function AuthScreen() {
       title={registering ? "Create your account" : "Welcome back"}
       subtitle={registering ? "Join Tagum City's pickleball community." : "Log in to find your next game."}
     >
+      <View style={authStyles.modeTabs} accessibilityRole="tablist">
+        {[["login", "Log in"], ["register", "Sign up"]].map(([key, label]) => {
+          const active = mode === key;
+          return (
+            <TouchableOpacity key={key} onPress={() => switchMode(key)} disabled={loading || active} style={[authStyles.modeTab, active && authStyles.modeTabActive]} accessibilityRole="tab" accessibilityState={{ selected: active }} accessibilityLabel={label}>
+              <Text style={[authStyles.modeTabText, active && authStyles.modeTabTextActive]}>{label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
       <View style={authStyles.fields}>
         {registering ? (
           <AuthField
@@ -279,6 +307,16 @@ export function AuthScreen() {
         loading={loading}
         style={{ marginTop: S.lg }}
       />
+      {googleSignInEnabled ? (
+        <>
+          <View style={authStyles.orRow}>
+            <View style={authStyles.orLine} />
+            <Text style={authStyles.orText}>or</Text>
+            <View style={authStyles.orLine} />
+          </View>
+          <Button variant="ghost" icon="logo-google" label="Continue with Google" onPress={google} loading={googleLoading} disabled={loading} style={{ minHeight: 52 }} />
+        </>
+      ) : null}
       <Notice>{notice}</Notice>
       <TextLink onPress={() => switchMode(registering ? "login" : "register")} disabled={loading} style={{ alignSelf: "center", marginTop: S.sm }} accessibilityLabel={registering ? "Already have an account? Log in" : "New to DinkTagum? Sign up"}>
         <Text style={[styles.signupText, { marginTop: 0 }]}>{registering ? "Already have an account? " : "New to DinkTagum? "}<Text style={{ color: C.volt, fontWeight: "800" }}>{registering ? "Log in" : "Sign up"}</Text></Text>
@@ -361,6 +399,14 @@ export function ResetPasswordScreen() {
 }
 
 const authStyles = StyleSheet.create({
+  modeTabs: { flexDirection: "row", backgroundColor: C.ink, borderRadius: R.md, padding: 4, borderWidth: 1, borderColor: C.line, marginTop: S.lg },
+  modeTab: { flex: 1, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: R.sm },
+  modeTabActive: { backgroundColor: C.volt },
+  modeTabText: { color: C.mist, fontSize: 14.5, fontWeight: "800" },
+  modeTabTextActive: { color: C.ink },
+  orRow: { flexDirection: "row", alignItems: "center", gap: S.sm, marginVertical: S.md },
+  orLine: { flex: 1, height: 1, backgroundColor: C.line },
+  orText: { color: C.textDim, fontSize: 12.5, fontWeight: "700" },
   scroll: { flexGrow: 1, justifyContent: "center", paddingHorizontal: S.xl, paddingVertical: S.xxl, maxWidth: 460, width: "100%", alignSelf: "center" },
   hero: { alignItems: "center", marginBottom: S.xl },
   logo: { width: 68, height: 68, borderRadius: 22, alignItems: "center", justifyContent: "center", shadowColor: C.volt, shadowOpacity: 0.35, shadowRadius: 18, shadowOffset: { width: 0, height: 0 } },

@@ -9,6 +9,7 @@ import { initialsFor, skillTier } from "../utils/format";
 import { calculateProfileStats, matchHistoryFromRecords } from "../utils/profileStats";
 import { uploadImageAsync } from "../utils/uploadImage";
 import { useGoTab } from "./HomeScreen";
+import { ProfileHighlights } from "./ProfileHighlights";
 import { Avatar, Button, C, EmptyCard, ErrorNote, FieldError, Icon, IconBtn, R, S, ScreenFrame, SectionTitle, TabBackButton, profileName, styles, useTopInset } from "./shared";
 import { notify } from "../utils/confirm";
 
@@ -178,6 +179,8 @@ function ProfileTab({ onSignOut, profile, user, saveProfile, savingProfile, isAd
           </View>
         ))}
       </View>
+
+      <ProfileHighlights />
 
       <View style={{ paddingHorizontal: S.xl, marginTop: S.xxl }}>
         <SectionTitle>Skill tracker</SectionTitle>

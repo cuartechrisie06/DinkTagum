@@ -11,6 +11,7 @@ import { GameRecordsProvider } from "../src/context/GameRecordsContext";
 import { OpenPlayProvider } from "../src/context/OpenPlayContext";
 import { OverlayNavProvider, useOverlayNav } from "../src/context/OverlayNavContext";
 import { TabBar } from "../src/components/TabBar";
+import { BiometricLock } from "../src/components/BiometricLock";
 import { AppOverlays } from "../src/screens/AppOverlays";
 import { AuthScreen, ResetPasswordScreen } from "../src/screens/AuthScreen";
 import { SheetHost, ToastHost } from "../src/components/Feedback";
@@ -60,18 +61,22 @@ function RootNavigator() {
 
   // Keyed by user id: signing out (or switching accounts) remounts these providers
   // from scratch instead of needing to manually reset each one's state.
+  // BiometricLock: a session restored at launch waits for fingerprint / Face
+  // ID when the player turned that on (see src/utils/biometric.js).
   return (
-    <DashboardProvider key={session.user.id}>
-      <CommunityFeedProvider key={session.user.id}>
-        <GameRecordsProvider key={session.user.id}>
-          <OpenPlayProvider key={session.user.id}>
-            <OverlayNavProvider key={session.user.id}>
-              <SignedInApp />
-            </OverlayNavProvider>
-          </OpenPlayProvider>
-        </GameRecordsProvider>
-      </CommunityFeedProvider>
-    </DashboardProvider>
+    <BiometricLock key={session.user.id}>
+      <DashboardProvider key={session.user.id}>
+        <CommunityFeedProvider key={session.user.id}>
+          <GameRecordsProvider key={session.user.id}>
+            <OpenPlayProvider key={session.user.id}>
+              <OverlayNavProvider key={session.user.id}>
+                <SignedInApp />
+              </OverlayNavProvider>
+            </OpenPlayProvider>
+          </GameRecordsProvider>
+        </CommunityFeedProvider>
+      </DashboardProvider>
+    </BiometricLock>
   );
 }
 

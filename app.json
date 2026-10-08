@@ -54,6 +54,13 @@
         {
           "color": "#E3EF26"
         }
+      ],
+      "expo-web-browser",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow DinkTagum to use Face ID to unlock the app."
+        }
       ]
     ]
   }

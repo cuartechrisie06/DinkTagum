@@ -162,6 +162,30 @@ export function DashboardProvider({ children }) {
     if (!error) setFavoriteIds(new Set((data || []).map((row) => row.court_id)));
   }, [userId]);
 
+  // profiles.home_court_id arrives with the home court migration. Read on its
+  // own so the main profile query keeps working before it's applied.
+  const [homeCourtId, setHomeCourtId] = useState(null);
+  const [homeCourtSupported, setHomeCourtSupported] = useState(false);
+  useEffect(() => {
+    if (!supabase) return undefined;
+    let active = true;
+    supabase.from("profiles").select("home_court_id").eq("id", userId).maybeSingle().then(({ data, error }) => {
+      if (!active) return;
+      setHomeCourtSupported(!error);
+      if (!error) setHomeCourtId(data?.home_court_id || null);
+    });
+    return () => { active = false; };
+  }, [userId]);
+
+  const setHomeCourt = useCallback(async (courtId) => {
+    if (!supabase || !homeCourtSupported) return false;
+    const previous = homeCourtId;
+    setHomeCourtId(courtId);
+    const { error } = await supabase.from("profiles").update({ home_court_id: courtId }).eq("id", userId);
+    if (error) { setHomeCourtId(previous); notify("Could not save home court", error.message); return false; }
+    return true;
+  }, [homeCourtId, homeCourtSupported, userId]);
+
   // Last dashboard seen on this device, so the app opens with data and still
   // shows courts and bookings when offline. Network data always wins.
   const cacheRef = useRef({ savedAt: null, fresh: false });
@@ -412,6 +436,9 @@ export function DashboardProvider({ children }) {
     findNearbyCourts,
     toggleFavorite,
     favoritesSupported,
+    homeCourtId,
+    homeCourtSupported,
+    setHomeCourt,
   };
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;

@@ -11,6 +11,8 @@ export type CourtLocation = {
   status: "Available" | "Full" | "Closed" | null;
   rating?: number | string | null;
   hourlyRate?: number | null;
+  // From enrichCourt: the first bookable slot today/tomorrow, when known.
+  nextSlot?: { label: string; today: boolean } | null;
 };
 
 export type MapPin = { id: string; lat: number; lng: number; status: string; label: string; name: string };
@@ -28,18 +30,34 @@ export const TAGUM_ZOOM = 13;
 // Matches the legend in CourtsMapPanel.
 export const PIN_COLORS = { Available: "#3DD68C", Full: "#F0605D", Closed: "#8A938F" } as const;
 
-// Price when the court has one (most useful at a glance), else a short name.
+// "4:00 PM" -> "4PM", "6:30 AM" -> "6:30AM" (pins have little room).
+export function shortTime(label: string): string {
+  const match = /^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/i.exec(String(label).trim());
+  if (!match) return String(label);
+  return `${match[1]}${match[2] && match[2] !== "00" ? `:${match[2]}` : ""}${match[3].toUpperCase()}`;
+}
+
+// Price when the court has one (most useful at a glance), else a short name,
+// plus today's next open slot when there is one: "₱150 · 4PM".
 export function pinLabel(court: CourtLocation): string {
+  let base: string;
   if (court.hourlyRate !== null && court.hourlyRate !== undefined && Number.isFinite(Number(court.hourlyRate))) {
-    return `₱${Math.round(Number(court.hourlyRate))}`;
+    base = `₱${Math.round(Number(court.hourlyRate))}`;
+  } else {
+    const name = (court.name || "Court").trim();
+    base = name.length > 16 ? `${name.slice(0, 15)}…` : name;
   }
-  const name = (court.name || "Court").trim();
-  return name.length > 16 ? `${name.slice(0, 15)}…` : name;
+  return court.status === "Available" && court.nextSlot?.today ? `${base} · ${shortTime(court.nextSlot.label)}` : base;
+}
+
+// Number(null) is 0, so missing coordinates must become NaN to be dropped.
+function coord(value: number | string | null | undefined): number {
+  return value === null || value === undefined || value === "" ? NaN : Number(value);
 }
 
 export function toMapPins(courts: CourtLocation[]): MapPin[] {
   return courts
-    .map((c) => ({ id: String(c.id), lat: Number(c.latitude), lng: Number(c.longitude), status: c.status || "Available", label: pinLabel(c), name: c.name || "Court" }))
+    .map((c) => ({ id: String(c.id), lat: coord(c.latitude), lng: coord(c.longitude), status: c.status || "Available", label: pinLabel(c), name: c.name || "Court" }))
     .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && !(p.lat === 0 && p.lng === 0));
 }
 

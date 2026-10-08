@@ -10,6 +10,7 @@ import { useOpenPlay } from "../context/OpenPlayContext";
 import { useOverlayNav } from "../context/OverlayNavContext";
 import { reservationTime } from "../utils/format";
 import { OpenPlaySection } from "./OpenPlay";
+import { GameSuggestions } from "./Suggestions";
 import { C, CourtCard, CourtCardSkeleton, EmptyCard, ErrorNote, HeaderBar, Icon, PostCardCompact, PostCardSkeleton, R, S, ScreenFrame, SectionTitle, profileName, styles } from "./shared";
 
 function greeting() {
@@ -42,6 +43,17 @@ function HomeTab({ openCourt, openChat, openNotifications, goTab, profile, user,
         </LinearGradient>
       </TouchableOpacity>
 
+      {!loading && !reservation ? (
+        <View style={{ paddingHorizontal: S.xl, marginTop: S.md }}>
+          <GameSuggestions
+            courts={courts}
+            onOpenCourt={openCourt}
+            onHost={(court) => (court ? openCourt(court) : goTab("courts"))}
+            intro="Nothing booked yet. Grab an open slot, start a pickup game, or bring a friend."
+          />
+        </View>
+      ) : null}
+
       {pendingMatches > 0 ? (
         <TouchableOpacity onPress={() => goTab("history")} activeOpacity={0.85} style={homeStyles.nudge} accessibilityRole="button" accessibilityLabel={`${pendingMatches} match score${pendingMatches === 1 ? "" : "s"} waiting for your confirmation`}>
           <View style={homeStyles.nudgeIcon}><Icon name="shield-checkmark-outline" size={18} color={C.ink} /></View>
@@ -66,7 +78,7 @@ function HomeTab({ openCourt, openChat, openNotifications, goTab, profile, user,
         ))}
       </View>
 
-      <OpenPlaySection courts={courts} openCourt={openCourt} onFindCourt={() => goTab("courts")} />
+      <OpenPlaySection courts={courts} openCourt={openCourt} onFindCourt={() => goTab("courts")} suggestCourtsWhenEmpty={loading || Boolean(reservation)} />
 
       <View style={{ paddingHorizontal: S.xl, marginTop: S.xxl }}>
         <SectionTitle action="See all" onAction={() => goTab("courts")}>Courts nearby</SectionTitle>

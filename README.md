@@ -148,6 +148,24 @@ npx supabase db push
 
 Assign administrators in Supabase Auth by setting `app_metadata.role = 'admin'`.
 
+The app keeps working before the newest migrations are applied: features that need them (declining bookings, report reasons, blocking, post types, home court) stay hidden or fall back. Apply them to get everything:
+
+| Migration | Adds |
+|---|---|
+| `20261009000000_reservation_status_flow` | `declined` status; players can only create pending bookings and cancel them; one notification per status change, naming the court and time |
+| `20261010000000_community_safety` | report reasons, user blocks, max 3 posts per minute, post types (photo / check-in / match result) |
+| `20261011000000_profile_home_court` | `profiles.home_court_id` (Profile home court, Find Players distance filter) |
+
+### Google sign-in (optional)
+
+1. Supabase Dashboard → **Authentication → Providers → Google**: enable it and add your Google OAuth client ID and secret.
+2. **Authentication → URL Configuration → Redirect URLs**: add `dink-tagum://auth-callback`, your web origin (e.g. `http://localhost:8081`), and for Expo Go the `exp://…/--/auth-callback` URL that `Linking.createURL("auth-callback")` prints.
+3. Set `EXPO_PUBLIC_GOOGLE_SIGN_IN=true` in `.env.local` and restart Expo.
+
+### Biometric unlock
+
+After signing in on a phone with a fingerprint or face enrolled, the app offers to unlock with it next time (Profile → Quick unlock turns it on or off). Fingerprint works in Expo Go on Android; Face ID needs a development build.
+
 ### Test data
 
 `scripts/seed-test-data.mjs` creates six fictional player accounts (`@dinktagum.test`) with profiles, community posts, match history, court reservations, and chat messages, so the app has realistic data to test against. It needs the project's **service role key** (never put this in `.env.local` — it bypasses RLS and must never ship in the app):

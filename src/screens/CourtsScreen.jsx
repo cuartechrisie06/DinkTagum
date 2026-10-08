@@ -30,7 +30,7 @@ function ModeToggle({ mode, setMode }) {
 }
 
 // Search + filters + sort + status chips. Sticky above the list; also shown in Map mode.
-function FindBar({ query, setQuery, status, setStatus, counts, sortLabel, filterCount, onOpenSheet }) {
+function FindBar({ query, setQuery, status, setStatus, counts, sortLabel, filterCount, onOpenSheet, nearMeActive, onNearMe, locating }) {
   return (
     <View style={courtStyles.bar}>
       <View style={{ flexDirection: "row", gap: S.sm, paddingHorizontal: S.xl }}>
@@ -45,6 +45,10 @@ function FindBar({ query, setQuery, status, setStatus, counts, sortLabel, filter
         </TouchableOpacity>
       </View>
       <ChipScroller style={courtStyles.chipRow} contentContainerStyle={{ alignItems: "center" }} keyboardShouldPersistTaps="handled">
+        <TouchableOpacity onPress={onNearMe} disabled={locating} style={[styles.chip, courtStyles.chip, { flexDirection: "row", alignItems: "center" }, nearMeActive && styles.chipActive]} accessibilityRole="button" accessibilityState={{ selected: nearMeActive, busy: locating }} accessibilityLabel={nearMeActive ? "Sorted by nearest to you" : "Sort by near me"}>
+          <Icon name="navigate" size={14} color={nearMeActive ? C.ink : C.volt} style={{ marginRight: 4 }} />
+          <Text style={[styles.chipText, nearMeActive && styles.chipTextActive]}>{locating ? "Locating…" : "Near me"}</Text>
+        </TouchableOpacity>
         <TouchableOpacity onPress={onOpenSheet} style={[styles.chip, courtStyles.chip, courtStyles.sortChip]} accessibilityRole="button" accessibilityLabel={`Sorted by ${sortLabel}. Change sort`}>
           <Icon name="swap-vertical" size={14} color={C.volt} style={{ marginRight: 4 }} />
           <Text style={[styles.chipText, { color: C.volt }]}>{sortLabel}</Text>
@@ -107,7 +111,7 @@ export function CourtsScreen() {
   const onToggleFavorite = favoritesSupported ? toggleFavorite : undefined;
 
   const subtitle = dashboardLoading ? "Loading courts…" : `${courts.length} court${courts.length === 1 ? "" : "s"} in Tagum City`;
-  const findBar = <FindBar query={query} setQuery={setQuery} status={status} setStatus={setStatus} counts={counts} sortLabel={sortLabel} filterCount={filterCount} onOpenSheet={() => setSheetOpen(true)} />;
+  const findBar = <FindBar query={query} setQuery={setQuery} status={status} setStatus={setStatus} counts={counts} sortLabel={sortLabel} filterCount={filterCount} onOpenSheet={() => setSheetOpen(true)} nearMeActive={sort === "nearest" && hasLocation} locating={locationLoading} onNearMe={() => applySheet("nearest", filters)} />;
   const sheet = <CourtFilterSheet visible={sheetOpen} onClose={() => setSheetOpen(false)} sort={sort} filters={filters} onApply={applySheet} amenities={amenities} countFor={countFor} favoritesSupported={favoritesSupported} hasLocation={hasLocation} />;
   const mapProps = {
     courts: visible,

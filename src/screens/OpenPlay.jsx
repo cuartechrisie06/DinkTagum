@@ -2,10 +2,11 @@ import React, { useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { buildDayOptions, slotHasStarted, useDashboard } from "../context/DashboardContext";
 import { BOOKING_SLOTS } from "../utils/courts";
+import { GameSuggestions } from "./Suggestions";
 import { OPEN_PLAY_FORMATS, SKILL_RANGES, skillLabel, useOpenPlay } from "../context/OpenPlayContext";
 import { confirmAction, notify } from "../utils/confirm";
 import { gameTimeLabel, initialsFor } from "../utils/format";
-import { Avatar, Button, C, EmptyCard, ErrorNote, Icon, R, S, SectionTitle, styles } from "./shared";
+import { Avatar, Button, C, ErrorNote, Icon, R, S, SectionTitle, styles } from "./shared";
 
 // Open play can start any hour the courts are typically lit.
 const START_TIMES = Array.from({ length: 16 }, (_, i) => {
@@ -184,7 +185,7 @@ export function HostGameForm({ court, onDone, onBooked }) {
 }
 
 // Home screen: upcoming open games across every court.
-export function OpenPlaySection({ courts, openCourt, onFindCourt }) {
+export function OpenPlaySection({ courts, openCourt, onFindCourt, suggestCourtsWhenEmpty = true }) {
   const { games, loading, error, available } = useOpenPlay();
   const courtById = useMemo(() => Object.fromEntries(courts.map((c) => [c.id, c])), [courts]);
   // Games the viewer is in come first, then the rest by start time.
@@ -207,9 +208,13 @@ export function OpenPlaySection({ courts, openCourt, onFindCourt }) {
         </ScrollView>
       ) : (
         <View style={{ paddingHorizontal: S.xl, marginTop: S.md }}>
-          <EmptyCard icon="people-circle-outline" title="No open games yet" message="Pick a court and host one. Players nearby can join until it's full.">
-            <Button label="Host a game" icon="megaphone-outline" onPress={onFindCourt} style={{ marginTop: S.lg, minHeight: 44 }} />
-          </EmptyCard>
+          <GameSuggestions
+            courts={courts}
+            onOpenCourt={openCourt}
+            onHost={(court) => (court ? openCourt(court) : onFindCourt())}
+            hostLabel="Host a game"
+            intro="No open games yet. Host one at a court with a free slot, and players nearby can join until it's full."
+          />
         </View>
       )}
       <ErrorNote>{error}</ErrorNote>
