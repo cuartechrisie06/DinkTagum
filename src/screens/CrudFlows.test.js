@@ -15,6 +15,8 @@ jest.mock("../../lib/supabase", () => {
     ],
     community_post_likes: [],
     community_post_comments: [],
+    user_blocks: [],
+    community_post_reports: [],
   };
   const builder = (table, op = "select", payload) => {
     const state = { single: false, id: null };
@@ -50,7 +52,13 @@ jest.mock("../../lib/supabase", () => {
     },
   };
 });
-jest.mock("../utils/confirm", () => ({ confirmAction: () => Promise.resolve(true), notify: jest.fn() }));
+// Sheets pick their first action; the report-reason picker picks "spam".
+jest.mock("../utils/confirm", () => ({
+  confirmAction: () => Promise.resolve(true),
+  notify: jest.fn(),
+  chooseAction: (_title, _message, actions) => actions[0]?.onPress?.(),
+  pickOption: () => Promise.resolve("spam"),
+}));
 jest.mock("expo-location", () => ({}));
 jest.mock("expo-router", () => ({ useRouter: () => ({ navigate: jest.fn() }) }));
 jest.mock("../context/AuthContext", () => ({ useAuth: () => ({ session: { user: { id: "u1", email: "a@b.c" } }, isAdmin: true, signOut: jest.fn() }) }));
@@ -149,10 +157,12 @@ it("Notifications: tapping a message notification directs to the conversation an
   expect(onOpenConvo).toHaveBeenCalledWith("conv-123");
 }, 60000);
 
-it("Feed: edits and deletes my post, reports someone else's", async () => {
+it("Feed: edits and deletes my post, reports someone else's with a reason", async () => {
   const tree = await render(<CommunityFeedProvider><FeedScreen /></CommunityFeedProvider>);
-  await press(tree, "Report");
-  expect(calls).toContainEqual(["rpc", "report_community_post", { p_post_id: "p1" }]);
+  await press(tree, "More options for Ben's post");
+  expect(calls).toContainEqual(["rpc", "report_community_post", { p_post_id: "p1", p_reason: "spam", p_details: null }]);
+  // Hidden for the reporter straight away.
+  expect(tree.root.findAll((n) => n.props.accessibilityLabel === "More options for Ben's post")).toHaveLength(0);
   await press(tree, "Edit");
   await act(async () => tree.root.findAll((n) => n.props.accessibilityLabel === "Edit post" && n.props.onChangeText)[0].props.onChangeText("Updated body"));
   await press(tree, "Save");

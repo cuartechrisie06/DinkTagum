@@ -4,7 +4,9 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { canCancelReservation, useDashboard } from "../context/DashboardContext";
 import { canEditRecord, confirmationBadge, gameRecordFieldErrors, useGameRecords } from "../context/GameRecordsContext";
-import { confirmAction } from "../utils/confirm";
+import { chooseAction, confirmAction, notify } from "../utils/confirm";
+import { composePostBody } from "../utils/community";
+import { useCommunityFeedOptional } from "../context/CommunityFeedContext";
 import { addBookingToCalendar } from "../utils/bookingActions";
 import { calendarBookingFor, canAddToCalendar, reservationBadgeKey } from "../utils/reservations";
 import { RESERVATION_STATUS } from "./reservationStatus";
@@ -208,6 +210,27 @@ function ConfirmationTag({ game }) {
 
 function MatchesPanel() {
   const { records, loading, error, saving, createRecord, updateRecord, deleteRecord, confirmationSupported } = useGameRecords();
+  const feed = useCommunityFeedOptional();
+
+  // After logging a match, offer to post the result to the community feed.
+  const offerShare = (saved) => {
+    if (!feed || typeof saved !== "object") return;
+    chooseAction("Match saved", "Share the result with the community?", [
+      {
+        label: "Share to feed",
+        icon: "megaphone-outline",
+        onPress: async () => {
+          const result = await feed.createCommunityPost({
+            type: feed.postTypesSupported ? "match" : "text",
+            body: composePostBody({ type: "match", match: saved }),
+            matchRecordId: saved.id,
+          });
+          notify(result.ok ? "Shared to the feed" : "Couldn't share the match", result.ok ? "Your result is on the community feed." : result.error, result.ok ? "success" : "error");
+        },
+      },
+      { label: "Not now", icon: "close" },
+    ]);
+  };
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
@@ -219,7 +242,7 @@ function MatchesPanel() {
     <>
       <PendingConfirmations />
       {adding ? (
-        <MatchForm allowTagging={confirmationSupported} submitLabel="Save match" saving={saving} onCancel={() => setAdding(false)} onSubmit={async (input) => { if (await createRecord(input)) setAdding(false); }} />
+        <MatchForm allowTagging={confirmationSupported} submitLabel="Save match" saving={saving} onCancel={() => setAdding(false)} onSubmit={async (input) => { const saved = await createRecord(input); if (saved) { setAdding(false); offerShare(saved); } }} />
       ) : (
         <Button icon="add" label="Record a match" onPress={() => { setEditingId(null); setAdding(true); }} style={{ marginBottom: S.lg }} />
       )}

@@ -139,7 +139,8 @@ export function GameRecordsProvider({ children }) {
     setSaving(false);
     if (insertError) { notify("Could not save match", insertError.message); return false; }
     setRecords((current) => sortRecords([data, ...current]));
-    return true;
+    // The saved row (truthy), so callers can e.g. offer to share it.
+    return data;
   }, [userId]);
 
   const updateRecord = useCallback(async (id, input) => {

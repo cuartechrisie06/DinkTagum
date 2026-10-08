@@ -34,6 +34,20 @@ export function notify(title, message, tone) {
   Alert.alert(title, message);
 }
 
+// Pick one of several options in a bottom sheet; resolves to its `key`, or
+// null when dismissed. options: [{ key, label, icon }]
+export function pickOption(title, message, options) {
+  return new Promise((resolve) => {
+    const shown = showSheet({
+      title,
+      message,
+      actions: options.map((o) => ({ tone: "default", icon: o.icon, label: o.label, onPress: () => resolve(o.key) })),
+      onDismiss: () => resolve(null),
+    });
+    if (!shown) resolve(null);
+  });
+}
+
 // A list of choices as a bottom sheet, e.g. Google Maps vs Waze.
 // actions: [{ label, icon, onPress }]
 export function chooseAction(title, message, actions) {

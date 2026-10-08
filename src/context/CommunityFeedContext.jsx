@@ -1,7 +1,8 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { notify } from "../utils/confirm";
 import { initialsFor, relativeTime } from "../utils/format";
+import { checkPostRateLimit, postErrorMessage, validatePost, visibleComments, visiblePosts } from "../utils/community";
 import { useAuth } from "./AuthContext";
 import { useDashboard } from "./DashboardContext";
 
@@ -11,6 +12,15 @@ const LEGACY_POST_COLUMNS = "id, author_id, body, photo_urls, created_at";
 // court_id comes from the court-tags migration; until it's applied the feed
 // falls back to LEGACY_POST_COLUMNS and hides court tagging.
 const POST_COLUMNS = `${LEGACY_POST_COLUMNS}, court_id`;
+// post_type / match_record_id come from the community safety migration.
+const TYPED_POST_COLUMNS = `${POST_COLUMNS}, post_type, match_record_id`;
+// Tried in order until one works with the database's schema.
+const COLUMN_LADDER = [TYPED_POST_COLUMNS, POST_COLUMNS, LEGACY_POST_COLUMNS];
+
+// Missing table / function (migration not applied yet) vs a real error.
+function isMissingRelation(error) {
+  return ["42P01", "PGRST202", "PGRST205"].includes(error?.code) || /does not exist|could not find/i.test(error?.message || "");
+}
 
 function isMissingColumn(error) {
   return error?.code === "42703" || /column .* does not exist/i.test(error?.message || "");
@@ -38,18 +48,43 @@ export function CommunityFeedProvider({ children }) {
   const [hasMorePosts, setHasMorePosts] = useState(false);
   const [loadingMorePosts, setLoadingMorePosts] = useState(false);
   const [courtTagsSupported, setCourtTagsSupported] = useState(true);
-  const columnsRef = useRef(POST_COLUMNS);
+  const [postTypesSupported, setPostTypesSupported] = useState(true);
+  const columnsRef = useRef(TYPED_POST_COLUMNS);
+  // Safety: players I blocked, and posts I reported (hidden for me right away).
+  const [blockedIds, setBlockedIds] = useState(() => new Set());
+  const [reportedIds, setReportedIds] = useState(() => new Set());
+  const [safetySupported, setSafetySupported] = useState(true);
+  // My post times this session, for the client-side rate limit.
+  const myPostTimes = useRef([]);
+  const isAdmin = session.user.app_metadata?.role === "admin";
 
   const selectPosts = useCallback(async (from) => {
     const query = (columns) => supabase.from("community_posts").select(columns).order("created_at", { ascending: false }).range(from, from + POSTS_PAGE_SIZE - 1);
     let result = await query(columnsRef.current);
-    if (result.error && isMissingColumn(result.error) && columnsRef.current !== LEGACY_POST_COLUMNS) {
-      columnsRef.current = LEGACY_POST_COLUMNS;
-      setCourtTagsSupported(false);
-      result = await query(LEGACY_POST_COLUMNS);
+    while (result.error && isMissingColumn(result.error) && columnsRef.current !== LEGACY_POST_COLUMNS) {
+      columnsRef.current = COLUMN_LADDER[COLUMN_LADDER.indexOf(columnsRef.current) + 1];
+      setPostTypesSupported(false);
+      if (columnsRef.current === LEGACY_POST_COLUMNS) setCourtTagsSupported(false);
+      result = await query(columnsRef.current);
     }
     return result;
   }, []);
+
+  const loadSafety = useCallback(async () => {
+    if (!supabase) return;
+    const [blocks, reports] = await Promise.all([
+      supabase.from("user_blocks").select("blocked_id").eq("blocker_id", userId),
+      supabase.from("community_post_reports").select("post_id").eq("reporter_id", userId),
+    ]);
+    if (isMissingRelation(blocks.error) || isMissingRelation(reports.error)) { setSafetySupported(false); return; }
+    if (!blocks.error) setBlockedIds(new Set((blocks.data || []).map((row) => row.blocked_id)));
+    if (!reports.error) setReportedIds((current) => new Set([...current, ...(reports.data || []).map((row) => row.post_id)]));
+  }, [userId]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- loadSafety sets state after its awaits
+    loadSafety();
+  }, [loadSafety]);
 
   // Likes/comment counts are fetched as raw rows and reduced client-side
   // rather than through a count-per-post RPC — simplest option at this
@@ -127,18 +162,36 @@ export function CommunityFeedProvider({ children }) {
     setHasMorePosts((postRows || []).length === POSTS_PAGE_SIZE);
   }, [loadingMorePosts, hasMorePosts, communityPosts.length, hydratePosts, selectPosts]);
 
-  const createCommunityPost = useCallback(async (body, photoUrls = [], courtId = null) => {
-    if (!supabase) return false;
+  // createCommunityPost({ type, body, photoUrls, courtId, matchRecordId }).
+  // The older positional form (body, photoUrls, courtId) still works.
+  // Returns { ok, error } so the composer can show the problem inline.
+  const createCommunityPost = useCallback(async (input, legacyPhotos = [], legacyCourtId = null) => {
+    if (!supabase) return { ok: false, error: "Supabase is not configured." };
+    const post = typeof input === "string" ? { type: "text", body: input, photoUrls: legacyPhotos, courtId: legacyCourtId } : input;
+    const { type = "text", photoUrls = [], courtId = null, matchRecordId = null } = post;
+    const body = String(post.body || "").trim();
+
+    const invalid = validatePost({ type, body, photoUrls, courtId, matchRecordId });
+    if (invalid) return { ok: false, error: invalid };
+    const mine = communityPosts.filter((p) => p.author_id === userId).map((p) => p.created_at);
+    const limit = checkPostRateLimit([...mine, ...myPostTimes.current]);
+    if (!limit.ok && !isAdmin) return { ok: false, error: `You're posting too fast. Try again in ${limit.retryInSec}s.` };
+
     const row = { author_id: userId, body, photo_urls: photoUrls };
-    if (courtId && columnsRef.current === POST_COLUMNS) row.court_id = courtId;
+    if (courtId && columnsRef.current !== LEGACY_POST_COLUMNS) row.court_id = courtId;
+    if (columnsRef.current === TYPED_POST_COLUMNS) {
+      row.post_type = type;
+      if (matchRecordId) row.match_record_id = matchRecordId;
+    }
     const { data, error } = await supabase.from("community_posts").insert(row).select(columnsRef.current).single();
-    if (error) { notify("Could not publish post", error.message); return false; }
+    if (error) return { ok: false, error: postErrorMessage(error) };
+    myPostTimes.current.push(Date.now());
     setCommunityPosts((current) => {
-      if (current.some((post) => post.id === data.id)) return current;
+      if (current.some((p) => p.id === data.id)) return current;
       return [communityPostForDisplay(data, {}, session.user, profile), ...current];
     });
-    return true;
-  }, [userId, session.user, profile]);
+    return { ok: true, post: data };
+  }, [userId, session.user, profile, isAdmin, communityPosts]);
 
   const updateCommunityPost = useCallback(async (id, body) => {
     if (!supabase) return false;
@@ -158,15 +211,48 @@ export function CommunityFeedProvider({ children }) {
     return true;
   }, [userId]);
 
-  // Reported posts are hidden from everyone but their author and admins
-  // (see the community_posts_select policy), so drop it from this feed.
-  const reportCommunityPost = useCallback(async (id) => {
-    if (!supabase) return false;
-    const { error } = await supabase.rpc("report_community_post", { p_post_id: id });
-    if (error) { notify("Could not report post", error.message); return false; }
+  // Admins only (the community_posts_delete policy allows them): removes
+  // someone else's post. The author is notified by private.notify_post_removed.
+  const moderatorDeletePost = useCallback(async (id) => {
+    if (!supabase || !isAdmin) return false;
+    const { error } = await supabase.from("community_posts").delete().eq("id", id);
+    if (error) { notify("Could not delete post", error.message); return false; }
     setCommunityPosts((current) => current.filter((post) => post.id !== id));
     return true;
+  }, [isAdmin]);
+
+  // Records the report with its reason and hides the post for me at once.
+  // (Reported posts are also hidden from everyone but their author and admins
+  // until reviewed; see the community_posts_select policy.) Falls back to the
+  // reason-less RPC until the community safety migration is applied.
+  const reportCommunityPost = useCallback(async (id, reason = "other", details = null) => {
+    if (!supabase) return false;
+    let { error } = await supabase.rpc("report_community_post", { p_post_id: id, p_reason: reason, p_details: details });
+    if (error && isMissingRelation(error)) ({ error } = await supabase.rpc("report_community_post", { p_post_id: id }));
+    if (error) { notify("Could not report post", error.message); return false; }
+    setReportedIds((current) => new Set([...current, id]));
+    notify("Thanks for reporting", "An admin will review it. You won't see this post anymore.", "success");
+    return true;
   }, []);
+
+  const blockUser = useCallback(async (otherId) => {
+    if (!supabase || otherId === userId) return false;
+    const { error } = await supabase.from("user_blocks").insert({ blocker_id: userId, blocked_id: otherId });
+    if (error && error.code !== "23505") {
+      notify("Could not block player", isMissingRelation(error) ? "Blocking needs the latest database update. Ask an admin to apply it." : error.message);
+      return false;
+    }
+    setBlockedIds((current) => new Set([...current, otherId]));
+    return true;
+  }, [userId]);
+
+  const unblockUser = useCallback(async (otherId) => {
+    if (!supabase) return false;
+    const { error } = await supabase.from("user_blocks").delete().eq("blocker_id", userId).eq("blocked_id", otherId);
+    if (error) { notify("Could not unblock player", error.message); return false; }
+    setBlockedIds((current) => { const next = new Set(current); next.delete(otherId); return next; });
+    return true;
+  }, [userId]);
 
   // Guards against a single tap reaching here twice (React Native Web can fire
   // onPress more than once per tap) before the optimistic update above has
@@ -199,12 +285,12 @@ export function CommunityFeedProvider({ children }) {
     const authorIds = [...new Set((data || []).map((c) => c.author_id).filter((id) => id !== userId))];
     const { data: authorRows } = authorIds.length ? await supabase.from("profiles").select("id, display_name, avatar_url").in("id", authorIds) : { data: [] };
     const profilesById = Object.fromEntries((authorRows || []).map((a) => [a.id, a]));
-    return (data || []).map((c) => {
+    return visibleComments(data || [], blockedIds).map((c) => {
       const author = c.author_id === userId ? profile : profilesById[c.author_id];
       const name = author?.display_name || "DinkTagum player";
       return { ...c, name, initials: initialsFor(name), avatarUrl: author?.avatar_url, time: relativeTime(c.created_at) };
     });
-  }, [userId, profile]);
+  }, [userId, profile, blockedIds]);
 
   const addComment = useCallback(async (postId, body) => {
     const trimmed = body.trim();
@@ -224,13 +310,22 @@ export function CommunityFeedProvider({ children }) {
     return true;
   }, []);
 
+  // Everyone reading the feed (Feed, Home) gets the same filtered list.
+  const shownPosts = useMemo(() => visiblePosts(communityPosts, { blockedIds, reportedIds }), [communityPosts, blockedIds, reportedIds]);
+
   const value = {
-    communityPosts, postsLoading, postsError, hasMorePosts, loadingMorePosts, loadMorePosts,
-    createCommunityPost, updateCommunityPost, deleteCommunityPost, reportCommunityPost,
+    communityPosts: shownPosts, postsLoading, postsError, hasMorePosts, loadingMorePosts, loadMorePosts,
+    createCommunityPost, updateCommunityPost, deleteCommunityPost, reportCommunityPost, moderatorDeletePost,
+    blockUser, unblockUser, blockedIds, safetySupported, isAdmin,
     toggleLike, loadComments, addComment, deleteComment,
-    loadFirstPage, courtTagsSupported,
+    loadFirstPage, courtTagsSupported, postTypesSupported,
   };
   return <CommunityFeedContext.Provider value={value}>{children}</CommunityFeedContext.Provider>;
+}
+
+// For screens that also render outside the provider (e.g. in tests).
+export function useCommunityFeedOptional() {
+  return useContext(CommunityFeedContext);
 }
 
 export function useCommunityFeed() {

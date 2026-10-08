@@ -488,7 +488,22 @@ export function PhotoViewer({ photos, startIndex = 0, onClose }) {
 }
 
 // Authors can edit/delete their own post; everyone else can report it.
-export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onToggleLike, onLoadComments, onAddComment, onDeleteComment, court, onOpenCourt }) {
+// Badge shown above typed posts (community safety migration's post_type).
+const POST_TYPE_BADGES = {
+  photo: { icon: "image", label: "Photo" },
+  checkin: { icon: "location", label: "Checked in" },
+  match: { icon: "trophy", label: "Match result" },
+};
+
+export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onBlock, onModeratorDelete, onMore, currentUserId, canModerate, onToggleLike, onLoadComments, onAddComment, onDeleteComment, court, onOpenCourt }) {
+  const typeBadge = POST_TYPE_BADGES[p.post_type];
+  const moreActions = isMine ? [] : [
+    onReport ? { label: "Report post", icon: "flag-outline", onPress: onReport } : null,
+    onBlock ? { label: `Block ${p.name}`, icon: "remove-circle-outline", onPress: onBlock } : null,
+    canModerate && onModeratorDelete ? { label: "Delete post (admin)", icon: "trash-outline", tone: "danger", onPress: onModeratorDelete } : null,
+  ].filter(Boolean);
+  // Comment delete: your own comments, or any comment for admins.
+  const canDeleteComment = (comment) => currentUserId === undefined || comment.author_id === currentUserId || canModerate;
   const [viewerIndex, setViewerIndex] = useState(null);
   const [brokenPhotos, setBrokenPhotos] = useState([]);
   const photoUrls = (p.photoUrls || []).filter((uri) => !brokenPhotos.includes(uri));
@@ -542,6 +557,12 @@ export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onTog
           <Text style={styles.postName} numberOfLines={1}>{p.name}</Text>
           <Text style={styles.postTime}>{p.time}</Text>
         </View>
+        {typeBadge ? (
+          <View style={styles.postTypeBadge} accessibilityLabel={`${typeBadge.label} post`}>
+            <Icon name={typeBadge.icon} size={12} color={C.volt} />
+            <Text style={styles.postTypeBadgeText}>{typeBadge.label}</Text>
+          </View>
+        ) : null}
       </View>
       {editing ? (
         <View style={{ marginTop: S.md }}>
@@ -575,7 +596,9 @@ export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onTog
           {isMine ? <>
             {onSave ? <PostAction icon="create-outline" label="Edit" onPress={() => { setDraft(p.text); setEditing(true); }} /> : null}
             {onDelete ? <PostAction icon="trash-outline" label="Delete" onPress={onDelete} /> : null}
-          </> : onReport ? <PostAction icon="flag-outline" label="Report" onPress={onReport} /> : null}
+          </> : onMore && moreActions.length ? (
+            <PostAction icon="ellipsis-horizontal" label="More" accessibilityLabel={`More options for ${p.name}'s post`} onPress={() => onMore(moreActions)} />
+          ) : null}
         </View>
       ) : null}
       {!compact && commentsOpen ? (
@@ -590,7 +613,7 @@ export function PostCard({ p, compact, isMine, onSave, onDelete, onReport, onTog
                 </View>
                 <Text style={styles.commentTime}>{c.time}</Text>
               </View>
-              {onDeleteComment ? (
+              {onDeleteComment && canDeleteComment(c) ? (
                 <TouchableOpacity onPress={() => removeComment(c)} accessibilityRole="button" accessibilityLabel="Delete comment" hitSlop={6} style={{ padding: 4 }}>
                   <Icon name="close" size={14} color={C.textFaint} />
                 </TouchableOpacity>
@@ -663,6 +686,8 @@ const card = { backgroundColor: C.surface, borderWidth: 1, borderColor: C.line }
 
 export const styles = StyleSheet.create({
   chipFade: { position: "absolute", top: 0, bottom: 0, right: 0, width: 44 },
+  postTypeBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: C.voltSoft, borderRadius: R.pill, paddingHorizontal: 9, paddingVertical: 4, marginLeft: S.sm },
+  postTypeBadgeText: { color: C.volt, fontSize: 11.5, fontWeight: "800" },
   inputError: { borderColor: C.butter },
   fieldErrorRow: { flexDirection: "row", alignItems: "flex-start", gap: 6, marginTop: 4 },
   fieldErrorText: { color: C.butter, fontSize: 12.5, lineHeight: 17, flex: 1 },
