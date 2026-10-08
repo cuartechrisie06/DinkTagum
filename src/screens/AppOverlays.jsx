@@ -67,6 +67,7 @@ export function AppOverlays() {
     activeBanner,
     dismissBanner,
     goBack,
+    closeOverlays,
   } = useOverlayNav();
 
   if (!session) return null;
@@ -120,17 +121,18 @@ export function AppOverlays() {
     setChatView({ id: conversationId, name: "Player", initials: "DT", avatarUrl: null });
   };
 
+  // Close every overlay first: a court page or chat left open would sit on
+  // top of the screen we navigate to, so the tap looked like it did nothing.
   const handleNavigate = (route) => {
-    setNotificationView(false);
-    if (route) {
-      router.push(route);
-    }
+    closeOverlays();
+    if (route) router.navigate(route);
   };
 
   const handleBannerPress = async (banner) => {
     dismissBanner();
     if (supabase && banner.id) {
-      void supabase.from("notifications").update({ is_read: true }).eq("id", banner.id);
+      // Awaited via .then(): Supabase queries don't run until then'd.
+      supabase.from("notifications").update({ is_read: true }).eq("id", banner.id).then(() => {});
     }
 
     if (banner.kind === "message") {

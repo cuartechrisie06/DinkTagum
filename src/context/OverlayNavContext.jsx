@@ -6,6 +6,14 @@ import { useAuth } from "./AuthContext";
 
 const OverlayNavContext = createContext(null);
 
+// A Realtime notifications event that represents a new arrival.
+export function isFreshUnread(payload, now = Date.now()) {
+  const row = payload?.new;
+  if (!row || row.is_read) return false;
+  if (payload.eventType === "INSERT") return true;
+  return payload.eventType === "UPDATE" && Math.abs(now - new Date(row.created_at).getTime()) < 30 * 1000;
+}
+
 // Mounted only while signed in (see app/_layout.jsx), keyed by user id, so signing out
 // naturally discards any open overlay instead of needing an explicit reset.
 export function OverlayNavProvider({ children }) {
@@ -25,16 +33,25 @@ export function OverlayNavProvider({ children }) {
     setActiveBanner(null);
   }, []);
 
+  // The banner checks which overlay is open through a ref, so the Realtime
+  // subscription below doesn't have to be torn down and re-created (losing
+  // events in between) every time an overlay opens or closes.
+  const viewRef = useRef({ notificationView, chatView });
+  useEffect(() => { viewRef.current = { notificationView, chatView }; }, [notificationView, chatView]);
+
   const triggerBanner = useCallback((notification) => {
     if (!notification || notification.is_read) return;
-    if (notificationView) return;
-    if (chatView && typeof chatView === "object" && chatView.id === notification.related_id) return;
+    const view = viewRef.current;
+    if (view.notificationView) return;
+    if (view.chatView && typeof view.chatView === "object" && view.chatView.id === notification.related_id) return;
     if (bannerTimerRef.current) clearTimeout(bannerTimerRef.current);
     setActiveBanner(notification);
     bannerTimerRef.current = setTimeout(() => {
       setActiveBanner(null);
     }, 6000);
-  }, [notificationView, chatView]);
+  }, []);
+
+  useEffect(() => () => clearTimeout(bannerTimerRef.current), []);
 
   const closeOverlays = useCallback(() => {
     setDetail(null);
@@ -91,9 +108,11 @@ export function OverlayNavProvider({ children }) {
       .channel(`overlay-badges-${userId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, (payload) => {
         refreshUnreadNotifications();
-        if (payload?.eventType === "INSERT" && payload?.new) {
-          triggerBanner(payload.new);
-        }
+        // Message notifications are one row per conversation, re-armed with an
+        // UPDATE (is_read back to false, fresh created_at) for each new message,
+        // so a just-created unread row counts as new whether it was inserted
+        // or updated. Mark-read updates (is_read true) never show a banner.
+        if (isFreshUnread(payload)) triggerBanner(payload.new);
       })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, refreshUnreadMessages)
       .subscribe();

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { Image, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useAuth } from "../context/AuthContext";
 import { profileFieldErrors, useDashboard } from "../context/DashboardContext";
@@ -8,6 +8,7 @@ import { useOverlayNav } from "../context/OverlayNavContext";
 import { initialsFor, skillTier } from "../utils/format";
 import { calculateProfileStats, matchHistoryFromRecords } from "../utils/profileStats";
 import { uploadImageAsync } from "../utils/uploadImage";
+import { isPresetAvatar, randomPresetSet } from "../utils/avatars";
 import { useGoTab } from "./HomeScreen";
 import { ProfileHighlights } from "./ProfileHighlights";
 import { Avatar, Button, C, EmptyCard, ErrorNote, FieldError, Icon, IconBtn, R, S, ScreenFrame, SectionTitle, TabBackButton, profileName, styles, useTopInset } from "./shared";
@@ -26,6 +27,8 @@ function ProfileTab({ onSignOut, profile, user, saveProfile, savingProfile, isAd
   const [preferredGameType, setPreferredGameType] = useState("Doubles");
   const [directoryVisible, setDirectoryVisible] = useState(true);
   const [availability, setAvailability] = useState([]);
+  // A fresh random set of ready-made icons each time the editor opens.
+  const [presets, setPresets] = useState(() => randomPresetSet());
   const [saveSuccess, setSaveSuccess] = useState(false);
   const { records: gameRecords, loading: gamesLoading, error: gamesError } = useGameRecords();
 
@@ -58,6 +61,7 @@ function ProfileTab({ onSignOut, profile, user, saveProfile, savingProfile, isAd
     setPreferredGameType(profile?.preferred_game_type || "Doubles");
     setDirectoryVisible(profile?.is_directory_visible !== false);
     setAvailability(Array.isArray(profile?.availability) ? profile.availability : []);
+    setPresets(randomPresetSet());
     setShowErrors(false);
     setEditing(true);
   };
@@ -116,8 +120,38 @@ function ProfileTab({ onSignOut, profile, user, saveProfile, savingProfile, isAd
           <Text style={styles.profileFieldLabel}>Photo</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: S.md }}>
             <Avatar initials={initialsFor(displayName)} uri={avatarUrl} size={44} />
-            <Button variant="ghost" icon="camera-outline" label={avatarUrl ? "Change photo" : "Upload photo"} onPress={pickAvatar} loading={uploadingAvatar} style={{ flex: 1 }} accessibilityLabel="Upload profile photo" />
+            <Button variant="ghost" icon="camera-outline" label={avatarUrl && !isPresetAvatar(avatarUrl) ? "Change photo" : "Upload photo"} onPress={pickAvatar} loading={uploadingAvatar} style={{ flex: 1 }} accessibilityLabel="Upload profile photo" />
           </View>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: S.xs }}>
+            <Text style={styles.profileFieldLabel}>Or pick an icon</Text>
+            <TouchableOpacity onPress={() => setPresets(randomPresetSet())} style={presetStyles.shuffle} accessibilityRole="button" accessibilityLabel="Show different icons">
+              <Icon name="shuffle" size={16} color={C.volt} />
+              <Text style={presetStyles.shuffleText}>Shuffle</Text>
+            </TouchableOpacity>
+          </View>
+          {[["Women", presets.women], ["Men", presets.men]].map(([group, icons]) => (
+            <View key={group}>
+              <Text style={styles.profileHint}>{group}</Text>
+              <View style={presetStyles.row}>
+                {icons.map((icon, index) => {
+                  const selected = avatarUrl === icon.url;
+                  return (
+                    <TouchableOpacity
+                      key={icon.id}
+                      onPress={() => setAvatarUrl(icon.url)}
+                      style={[presetStyles.option, selected && presetStyles.optionSelected]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      accessibilityLabel={`${group === "Women" ? "Woman" : "Man"} icon ${index + 1}${selected ? ", selected" : ""}`}
+                    >
+                      <Image source={{ uri: icon.url }} style={presetStyles.image} />
+                      {selected ? <View style={presetStyles.check}><Icon name="checkmark" size={12} color={C.ink} /></View> : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          ))}
           <Text style={styles.profileFieldLabel}>Display name</Text>
           <TextInput value={displayName} onChangeText={setDisplayName} placeholder="Display name" placeholderTextColor={C.textFaint} style={[styles.profileInput, errors.display_name && styles.inputError]} accessibilityLabel="Display name" accessibilityHint={errors.display_name} />
           <FieldError message={errors.display_name} />
@@ -290,4 +324,14 @@ const trackerStyles = StyleSheet.create({
   resultWin: { backgroundColor: C.volt, borderColor: C.volt },
   resultLetter: { fontSize: 14, fontWeight: "800" },
   resultScore: { fontSize: 12, fontWeight: "700", marginTop: 2 },
+});
+
+const presetStyles = StyleSheet.create({
+  row: { flexDirection: "row", justifyContent: "space-between", marginTop: 6 },
+  option: { width: 54, height: 54, borderRadius: 27, borderWidth: 2, borderColor: "transparent", overflow: "visible", alignItems: "center", justifyContent: "center" },
+  optionSelected: { borderColor: C.volt },
+  image: { width: 48, height: 48, borderRadius: 24, backgroundColor: C.surface2 },
+  check: { position: "absolute", right: -2, bottom: -2, width: 20, height: 20, borderRadius: 10, backgroundColor: C.volt, borderWidth: 2, borderColor: C.surface, alignItems: "center", justifyContent: "center" },
+  shuffle: { flexDirection: "row", alignItems: "center", gap: 5, minHeight: 44, paddingHorizontal: S.sm },
+  shuffleText: { color: C.volt, fontSize: 13, fontWeight: "700" },
 });

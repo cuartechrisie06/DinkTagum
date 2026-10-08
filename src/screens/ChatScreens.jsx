@@ -85,6 +85,18 @@ export function ChatList({ onBack, openThread }) {
   );
 }
 
+// Marks the chat read for me and clears its "sent you a message" notification
+// (one notification row per conversation, re-armed on each new message), so
+// the bell badge and the chat list agree. Supabase queries only run once
+// awaited / then'd, hence the explicit awaits.
+export async function markConversationRead(conversationId, userId) {
+  if (!supabase) return;
+  await Promise.all([
+    supabase.rpc("mark_conversation_read", { p_conversation_id: conversationId }),
+    supabase.from("notifications").update({ is_read: true }).eq("recipient_id", userId).eq("kind", "message").eq("related_id", conversationId).eq("is_read", false),
+  ]);
+}
+
 export function ChatThread({ convo, onBack }) {
   const { session } = useAuth();
   const scrollRef = useRef(null);
@@ -136,7 +148,7 @@ export function ChatThread({ convo, onBack }) {
         setError("");
       }
       setLoading(false);
-      supabase.rpc("mark_conversation_read", { p_conversation_id: convo.id });
+      markConversationRead(convo.id, session.user.id);
     };
     loadMessages();
 
@@ -150,7 +162,7 @@ export function ChatThread({ convo, onBack }) {
           pendingBottomScrollRef.current = true;
           setMessages((current) => upsertMessage(current, payload.new));
           if (payload.new.sender_id !== session.user.id) {
-            supabase.rpc("mark_conversation_read", { p_conversation_id: convo.id });
+            markConversationRead(convo.id, session.user.id);
           }
         }
       )
